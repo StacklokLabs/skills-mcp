@@ -6,6 +6,7 @@ and discovering resources in scripts/, references/, and assets/ subdirectories.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path  # noqa: TC003 - used at runtime
 from typing import TYPE_CHECKING
@@ -65,6 +66,7 @@ class LocalSkillRepository:
         self._parser = parser or ManifestParser()
         self._token_estimator = token_estimator or TokenEstimator()
         self._skills_cache: dict[str, Skill] | None = None
+        self._cache_lock = asyncio.Lock()
 
     async def list_all(self) -> list[Skill]:
         """List all available skills.
@@ -72,9 +74,10 @@ class LocalSkillRepository:
         Returns:
             List of all discovered skills.
         """
-        if self._skills_cache is None:
-            await self._load_skills()
-        return list(self._skills_cache.values()) if self._skills_cache else []
+        async with self._cache_lock:
+            if self._skills_cache is None:
+                await self._load_skills()
+            return list(self._skills_cache.values()) if self._skills_cache else []
 
     async def find_by_name(self, name: SkillName) -> Skill | None:
         """Find a skill by its name.
@@ -85,9 +88,10 @@ class LocalSkillRepository:
         Returns:
             The matching skill, or None if not found.
         """
-        if self._skills_cache is None:
-            await self._load_skills()
-        return self._skills_cache.get(name.value) if self._skills_cache else None
+        async with self._cache_lock:
+            if self._skills_cache is None:
+                await self._load_skills()
+            return self._skills_cache.get(name.value) if self._skills_cache else None
 
     async def get_resource_content(
         self, skill_name: SkillName, resource_type: str, resource_name: str
@@ -141,8 +145,9 @@ class LocalSkillRepository:
         This clears the internal cache and forces a rescan of all skill
         directories on the next access.
         """
-        self._skills_cache = None
-        logger.info("Skill cache cleared, will reload on next access")
+        async with self._cache_lock:
+            self._skills_cache = None
+            logger.info("Skill cache cleared, will reload on next access")
 
     async def _load_skills(self) -> None:
         """Scan directories and load all skills into cache."""
