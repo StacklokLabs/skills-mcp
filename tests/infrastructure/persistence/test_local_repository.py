@@ -1,13 +1,17 @@
 """Tests for LocalSkillRepository."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from skills_mcp.domain.exceptions import ResourceNotFoundError, SkillNotFoundError
 from skills_mcp.domain.models.resource import ResourceType
 from skills_mcp.domain.models.skill_name import SkillName
-from skills_mcp.infrastructure.persistence.local_repository import LocalSkillRepository
+from skills_mcp.infrastructure.persistence.local_repository import (
+    MAX_RESOURCE_SIZE_BYTES,
+    LocalSkillRepository,
+)
 
 
 # Path to test fixtures
@@ -201,3 +205,93 @@ class TestLocalSkillRepositoryTokenCounts:
         assert skill is not None
         for resource in skill.all_resources:
             assert resource.token_count > 0
+
+
+class TestLocalSkillRepositoryResourceSizeLimits:
+    """Tests for resource size limits."""
+
+    async def test_reject_oversized_resource(self, tmp_path: Path) -> None:
+        """Should reject resources that exceed the size limit."""
+        # Create a valid skill structure
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            """---
+name: test-skill
+description: A test skill
+---
+
+# Test Skill
+"""
+        )
+        scripts_dir = skill_dir / "scripts"
+        scripts_dir.mkdir()
+
+        # Create a small script file (actual content doesn't matter for this test)
+        script_file = scripts_dir / "large.py"
+        script_file.write_text("# small content")
+
+        repo = LocalSkillRepository([tmp_path])
+
+        # Load skills first so cache is populated before we mock stat
+        await repo.list_all()
+
+        # Mock stat to report a file size over the limit
+        original_stat = Path.stat
+
+        def mock_stat(self: Path, **kwargs: object) -> object:
+            result = original_stat(self)
+            if self == script_file.resolve():
+                # Return a mock stat result with large size
+                class MockStat:
+                    st_size = MAX_RESOURCE_SIZE_BYTES + 1
+                    st_mode = result.st_mode
+                    st_ino = result.st_ino
+                    st_dev = result.st_dev
+                    st_nlink = result.st_nlink
+                    st_uid = result.st_uid
+                    st_gid = result.st_gid
+                    st_atime = result.st_atime
+                    st_mtime = result.st_mtime
+                    st_ctime = result.st_ctime
+
+                return MockStat()
+            return result
+
+        with patch.object(Path, "stat", mock_stat):
+            with pytest.raises(ResourceNotFoundError) as exc_info:
+                await repo.get_resource_content(
+                    SkillName("test-skill"), "scripts", "large.py"
+                )
+
+            assert "too large" in str(exc_info.value).lower()
+
+    async def test_accept_resource_within_limit(self, tmp_path: Path) -> None:
+        """Should accept resources within the size limit."""
+        # Create a valid skill structure
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            """---
+name: test-skill
+description: A test skill
+---
+
+# Test Skill
+"""
+        )
+        scripts_dir = skill_dir / "scripts"
+        scripts_dir.mkdir()
+
+        # Create a small script file
+        script_file = scripts_dir / "small.py"
+        script_file.write_text("print('hello')")
+
+        repo = LocalSkillRepository([tmp_path])
+
+        # Should succeed without error
+        content = await repo.get_resource_content(
+            SkillName("test-skill"), "scripts", "small.py"
+        )
+
+        assert b"print('hello')" in content
