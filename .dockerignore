@@ -1,0 +1,57 @@
+# Virtual environments - platform dependent
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Documentation build artifacts
+site/
+docs/_build/
+
+# Distribution and build artifacts
+dist/
+build/
+*.egg-info/
+
+# Docker files (prevent recursive context)
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD and project config
+.github/
+.claude/
+CLAUDE.md
+*.md
+!README.md
+
+# Local development files
+.env
+.env.*
+*.local
+
+# Test fixtures (not needed in production)
+tests/
