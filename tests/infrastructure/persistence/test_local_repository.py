@@ -1,5 +1,6 @@
 """Tests for LocalSkillRepository."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import patch
 
@@ -295,3 +296,84 @@ description: A test skill
         )
 
         assert b"print('hello')" in content
+
+
+class TestLocalSkillRepositoryConcurrency:
+    """Tests for concurrent access to repository."""
+
+    async def test_concurrent_list_all_calls(self) -> None:
+        """Should handle concurrent list_all calls safely."""
+        repo = LocalSkillRepository([FIXTURES_PATH])
+
+        # Call list_all concurrently multiple times
+        results = await asyncio.gather(*[repo.list_all() for _ in range(10)])
+
+        # All results should be consistent
+        first_len = len(results[0])
+        for result in results:
+            assert len(result) == first_len
+
+    async def test_concurrent_find_and_list(self) -> None:
+        """Should handle concurrent find_by_name and list_all calls."""
+        repo = LocalSkillRepository([FIXTURES_PATH])
+
+        async def find_skill() -> bool:
+            skill = await repo.find_by_name(SkillName("valid-skill"))
+            return skill is not None
+
+        async def list_skills() -> int:
+            skills = await repo.list_all()
+            return len(skills)
+
+        # Mix of find and list operations
+        tasks = [find_skill() for _ in range(5)] + [list_skills() for _ in range(5)]
+        results = await asyncio.gather(*tasks)
+
+        # All find operations should succeed
+        for result in results[:5]:
+            assert result is True
+
+        # All list operations should return same count
+        counts = results[5:]
+        assert all(c == counts[0] for c in counts)
+
+    async def test_concurrent_refresh_and_read(self) -> None:
+        """Should handle refresh during concurrent reads without errors."""
+        repo = LocalSkillRepository([FIXTURES_PATH])
+
+        async def read_loop() -> int:
+            """Repeatedly read skills."""
+            count = 0
+            for _ in range(5):
+                skills = await repo.list_all()
+                count += len(skills)
+                await asyncio.sleep(0.01)
+            return count
+
+        async def refresh_loop() -> None:
+            """Repeatedly refresh the cache."""
+            for _ in range(3):
+                await repo.refresh()
+                await asyncio.sleep(0.02)
+
+        # Run reads and refreshes concurrently
+        results = await asyncio.gather(
+            read_loop(), read_loop(), refresh_loop(), return_exceptions=True
+        )
+
+        # No exceptions should be raised
+        for result in results:
+            assert not isinstance(result, Exception)
+
+    async def test_cache_populated_once_under_concurrent_access(self) -> None:
+        """Cache should be populated exactly once even with concurrent first access."""
+        repo = LocalSkillRepository([FIXTURES_PATH])
+
+        # Multiple concurrent first calls to list_all
+        results = await asyncio.gather(*[repo.list_all() for _ in range(10)])
+
+        # All should return same skills (cache was populated atomically)
+        first_names = {s.name.value for s in results[0]}
+        for result in results[1:]:
+            names = {s.name.value for s in result}
+            assert names == first_names

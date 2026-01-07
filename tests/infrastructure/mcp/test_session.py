@@ -1,5 +1,7 @@
 """Tests for session management."""
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import timedelta
 
 import pytest
@@ -223,3 +225,140 @@ class TestSessionManager:
         for session_id in valid_ids:
             session = manager.get_or_create(session_id)
             assert session.session_id == session_id
+
+
+class TestSessionManagerConcurrency:
+    """Tests for concurrent access to SessionManager."""
+
+    def test_concurrent_session_creation(self) -> None:
+        """Should safely handle concurrent session creation."""
+        manager = SessionManager()
+        session_ids = [f"session-{i}" for i in range(100)]
+
+        def create_session(session_id: str) -> str:
+            session = manager.get_or_create(session_id)
+            return session.session_id
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(create_session, sid) for sid in session_ids]
+            results = [f.result() for f in as_completed(futures)]
+
+        # All sessions should be created
+        assert len(results) == 100
+        assert manager.session_count == 100
+
+    def test_concurrent_get_or_create_same_session(self) -> None:
+        """Multiple threads creating the same session should get same instance."""
+        manager = SessionManager()
+        results: list[SessionState] = []
+        lock = threading.Lock()
+
+        def get_session() -> None:
+            session = manager.get_or_create("shared-session")
+            with lock:
+                results.append(session)
+
+        threads = [threading.Thread(target=get_session) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # All threads should get the same session instance
+        assert len(results) == 10
+        first_session = results[0]
+        for session in results[1:]:
+            assert session is first_session
+
+    def test_concurrent_mark_expanded(self) -> None:
+        """Should safely handle concurrent mark_expanded calls."""
+        manager = SessionManager()
+
+        def mark_skill(skill_name: str) -> None:
+            manager.mark_expanded("session-1", SkillName(skill_name))
+
+        skill_names = [f"skill-{i}" for i in range(50)]
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(mark_skill, skill_names))
+
+        # All skills should be marked as expanded
+        for skill_name in skill_names:
+            assert manager.is_expanded("session-1", SkillName(skill_name))
+
+    def test_concurrent_cleanup_and_access(self) -> None:
+        """Should safely handle cleanup during concurrent access."""
+        manager = SessionManager(timeout=timedelta(hours=24))
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        def create_and_access() -> None:
+            try:
+                for i in range(10):
+                    session_id = f"session-{threading.current_thread().name}-{i}"
+                    manager.get_or_create(session_id)
+                    manager.mark_expanded(session_id, SkillName("test-skill"))
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+
+        def cleanup_loop() -> None:
+            try:
+                for _ in range(5):
+                    manager.cleanup_expired()
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+
+        threads = [
+            threading.Thread(target=create_and_access, name=f"worker-{i}")
+            for i in range(5)
+        ]
+        threads.append(threading.Thread(target=cleanup_loop, name="cleaner"))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No exceptions should have been raised
+        assert len(errors) == 0
+
+    def test_concurrent_remove_and_access(self) -> None:
+        """Should safely handle remove during concurrent access."""
+        manager = SessionManager()
+        errors: list[Exception] = []
+        lock = threading.Lock()
+
+        # Create initial sessions
+        for i in range(20):
+            manager.get_or_create(f"session-{i}")
+
+        def access_sessions() -> None:
+            try:
+                for i in range(20):
+                    manager.get(f"session-{i}")
+                    manager.is_expanded(f"session-{i}", SkillName("test"))
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+
+        def remove_sessions() -> None:
+            try:
+                for i in range(20):
+                    manager.remove(f"session-{i}")
+            except Exception as e:
+                with lock:
+                    errors.append(e)
+
+        threads = [
+            threading.Thread(target=access_sessions) for _ in range(3)
+        ] + [threading.Thread(target=remove_sessions)]
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # No exceptions should have been raised
+        assert len(errors) == 0
