@@ -7,6 +7,7 @@ have been "expanded" (their sub-resources are visible).
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -23,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 # Default session timeout
 DEFAULT_SESSION_TIMEOUT = timedelta(hours=24)
+
+# Session ID constraints
+MAX_SESSION_ID_LENGTH = 256
+# Allow alphanumeric, hyphens, underscores (safe for logging and dict keys)
+SESSION_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 @dataclass
@@ -101,13 +107,19 @@ class SessionManager:
 
         Args:
             session_id: Optional session ID. If not provided, a new UUID
-                is generated.
+                is generated. If provided, it must pass validation.
 
         Returns:
             The session state for the given ID.
+
+        Raises:
+            ValueError: If the session ID is invalid.
         """
         if session_id is None:
             session_id = str(uuid.uuid4())
+        else:
+            # Validate externally-provided session ID
+            self._validate_session_id(session_id)
 
         with self._lock:
             if session_id not in self._sessions:
@@ -208,3 +220,19 @@ class SessionManager:
         """Return the number of active sessions."""
         with self._lock:
             return len(self._sessions)
+
+    def _validate_session_id(self, session_id: str) -> None:
+        """Validate a session ID.
+
+        Args:
+            session_id: The session ID to validate.
+
+        Raises:
+            ValueError: If the session ID is invalid.
+        """
+        if len(session_id) > MAX_SESSION_ID_LENGTH:
+            raise ValueError(
+                f"Session ID too long: {len(session_id)} > {MAX_SESSION_ID_LENGTH}"
+            )
+        if not SESSION_ID_PATTERN.match(session_id):
+            raise ValueError("Session ID contains invalid characters")

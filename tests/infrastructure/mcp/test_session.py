@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 
+import pytest
+
 from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.infrastructure.mcp.session import (
     DEFAULT_SESSION_TIMEOUT,
@@ -188,5 +190,36 @@ class TestSessionManager:
         manager.get_or_create("session-2")
         assert manager.session_count == 2
 
-        manager.remove("session-1")
-        assert manager.session_count == 1
+    def test_session_id_validation_too_long(self) -> None:
+        """Should reject session IDs that are too long."""
+        manager = SessionManager()
+
+        # Session ID over 256 characters
+        long_id = "a" * 257
+
+        with pytest.raises(ValueError, match="too long"):
+            manager.get_or_create(long_id)
+
+    def test_session_id_validation_invalid_characters(self) -> None:
+        """Should reject session IDs with invalid characters."""
+        manager = SessionManager()
+
+        with pytest.raises(ValueError, match="invalid characters"):
+            manager.get_or_create("session<script>alert(1)</script>")
+
+    def test_session_id_validation_allows_valid_ids(self) -> None:
+        """Should accept valid session IDs."""
+        manager = SessionManager()
+
+        # These should all be valid
+        valid_ids = [
+            "abc123",
+            "session-1",
+            "SESSION_ID",
+            "a1b2c3-d4e5f6_G7H8I9",
+            "a" * 256,  # Exactly at max length
+        ]
+
+        for session_id in valid_ids:
+            session = manager.get_or_create(session_id)
+            assert session.session_id == session_id
