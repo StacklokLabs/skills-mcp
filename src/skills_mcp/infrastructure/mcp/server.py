@@ -24,6 +24,7 @@ from mcp.types import (
 )
 from pydantic import AnyUrl
 
+from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.domain.services.token_estimator import estimate_tokens
 from skills_mcp.infrastructure.mcp.session import SessionManager
@@ -36,7 +37,6 @@ _current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar
 
 
 if TYPE_CHECKING:
-    from skills_mcp.domain.models.skill_name import SkillName
     from skills_mcp.domain.repositories import SkillRepository
 
 
@@ -207,10 +207,6 @@ class SkillsMCPServer:
         Raises:
             ValueError: If the URI is invalid or resource not found.
         """
-        from skills_mcp.domain.models.skill_name import (  # noqa: PLC0415
-            SkillName as SkillNameClass,
-        )
-
         # Parse the URI: skills://{name} or skills://{name}/{type}/{file}
         if not uri.startswith(f"{SKILL_URI_SCHEME}://"):
             raise ValueError(f"Invalid URI scheme: {uri}")
@@ -225,7 +221,7 @@ class SkillsMCPServer:
         if any(".." in part for part in parts):
             raise ValueError(f"Invalid URI: path traversal not allowed: {uri}")
 
-        skill_name = SkillNameClass(parts[0])
+        skill_name = SkillName(parts[0])
 
         if len(parts) == 1:
             # Reading skill instructions - this triggers expansion
