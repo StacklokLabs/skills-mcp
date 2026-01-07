@@ -193,9 +193,10 @@ Server declares these capabilities:
 Environment variables:
 
 ```bash
-SKILLS_MCP_PATHS="/path/to/skills:/another/path"  # Colon-separated
-SKILLS_MCP_TRANSPORT="stdio"                       # or "streamable-http"
-SKILLS_MCP_LOG_LEVEL="info"
+SKILLS_MCP_PATHS="/path/to/skills:/another/path"  # Colon-separated (required)
+SKILLS_MCP_HOST="127.0.0.1"                        # Default host
+SKILLS_MCP_PORT="8080"                             # Default port
+SKILLS_MCP_LOG_LEVEL="WARNING"                     # Log level
 ```
 
 ## References

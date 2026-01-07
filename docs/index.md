@@ -2,44 +2,33 @@
 
 MCP server implementing the [Agent Skills specification](https://agentskills.io/specification).
 
-## Overview
+## How It Works
 
-Skills MCP Server enables AI agents to discover, validate, and execute skills via the
-[Model Context Protocol](https://modelcontextprotocol.io/). It provides a bridge between
-the Agent Skills ecosystem and MCP-compatible AI clients like Claude.
+The server exposes Agent Skills as MCP resources with **progressive disclosure**:
 
-## Features
+| Tier | Content | When Loaded |
+|------|---------|-------------|
+| 1. Metadata | Name + description (~100 tokens/skill) | On `resources/list` |
+| 2. Instructions | SKILL.md body (<5000 tokens) | When skill is read |
+| 3. Resources | Scripts, references, assets | On demand after Tier 2 |
 
-- **Skill Discovery**: Find and list available skills from local directories or remote sources
-- **Validation**: Validate skill definitions against the Agent Skills specification
-- **Execution**: Safely execute skill scripts in a sandboxed environment
-- **MCP Integration**: Full MCP protocol support with streamable HTTP transport
+When an agent reads a skill, the server:
+1. Returns the full SKILL.md body
+2. Marks the skill as "expanded" for that session
+3. Sends `resources/list_changed` notification
+4. Subsequent `resources/list` includes sub-resources for expanded skills
 
 ## Quick Start
 
 ```bash
-# Install with uv
-uv add skills-mcp
-
-# Run the server
-skills-mcp serve --port 8080
+export SKILLS_MCP_PATHS="/path/to/skills"
+uv run skills-mcp
 ```
 
-See the [Quick Start Guide](getting-started/quick-start.md) for detailed instructions.
-
-## Architecture
-
-This project follows Domain-Driven Design principles with a layered architecture:
-
-- **Domain Layer**: Core business logic and entities
-- **Application Layer**: Use cases and orchestration
-- **Infrastructure Layer**: MCP server, persistence, HTTP clients
-- **Interfaces Layer**: CLI and entry points
-
-Learn more in the [Architecture Overview](architecture/overview.md).
+See [Architecture](architecture/mcp-server-design.md) for design details.
 
 ## Links
 
-- [Agent Skills Specification](https://agentskills.io/specification)
-- [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25/basic)
-- [GitHub Repository](https://github.com/stacklok/skills-mcp)
+- [Agent Skills Spec](https://agentskills.io/specification)
+- [MCP Spec](https://modelcontextprotocol.io/specification/2025-11-25/basic)
+- [GitHub](https://github.com/stacklok/skills-mcp)

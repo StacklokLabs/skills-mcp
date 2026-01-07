@@ -7,73 +7,30 @@ repo_name: stacklok/skills-mcp
 theme:
   name: material
   features:
-    - navigation.tabs
-    - navigation.sections
-    - navigation.expand
-    - navigation.path
-    - navigation.top
     - content.code.copy
-    - content.code.annotate
     - search.highlight
-    - search.share
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-7
-        name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: indigo
-      accent: indigo
-      toggle:
-        icon: material/brightness-4
-        name: Switch to light mode
 
 plugins:
   - search
-  - mkdocstrings:
-      handlers:
-        python:
-          options:
-            docstring_style: google
-            show_source: true
-            show_root_heading: true
-            show_category_heading: true
 
 markdown_extensions:
   - pymdownx.highlight:
       anchor_linenums: true
-      line_spans: __span
-      pygments_lang_class: true
-  - pymdownx.inlinehilite
-  - pymdownx.snippets
   - pymdownx.superfences
-  - admonition
-  - pymdownx.details
-  - attr_list
-  - md_in_html
+  - tables
   - toc:
       permalink: true
 
 nav:
   - Home: index.md
-  - Getting Started:
-      - Installation: getting-started/installation.md
-      - Quick Start: getting-started/quick-start.md
-      - Configuration: getting-started/configuration.md
-  - Architecture:
-      - Overview: architecture/overview.md
-      - DDD Layers: architecture/ddd-layers.md
-      - Decisions:
-          - ADR-001 DDD Architecture: architecture/decisions/001-ddd-architecture.md
-  - Development:
-      - Contributing: development/contributing.md
-      - Code Style: development/code-style.md
-      - Testing: development/testing.md
-      - Security: development/security.md
+  - Architecture: architecture/mcp-server-design.md
   - Changelog: changelog.md
 
 extra:

@@ -3,43 +3,35 @@
 ## Project Overview
 
 Python MCP server implementing the Agent Skills specification (agentskills.io).
-Enables AI agents to discover, validate, and execute skills via MCP protocol.
+Exposes skills as MCP resources with progressive disclosure (3-tier loading).
 
 ## Technology Stack
 
-- **Language**: Python 3.14 (MCP SDK requires >=3.10)
+- **Language**: Python 3.10+ (using 3.13)
 - **Package Manager**: uv
 - **MCP SDK**: mcp[cli] (python-sdk)
 - **Validation**: Pydantic v2
-- **HTTP Client**: httpx
 - **Transport**: Streamable HTTP
 
-## Architecture (DDD)
+## Architecture
 
 ```
 src/skills_mcp/
-├── domain/           # Core business logic (no external deps)
-│   ├── models/       # Domain entities (Skill, Manifest, etc.)
-│   ├── services/     # Domain services
-│   └── exceptions/   # Domain-specific exceptions
-├── application/      # Use cases and orchestration
-│   ├── commands/     # Command handlers
-│   ├── queries/      # Query handlers
-│   └── dto/          # Data transfer objects
-├── infrastructure/   # External concerns
-│   ├── mcp/          # MCP server implementation
-│   ├── persistence/  # Storage adapters
-│   └── http/         # HTTP clients
-└── interfaces/       # Entry points
-    └── cli/          # CLI commands
+├── domain/              # Core business logic (no external deps)
+│   ├── models/          # Skill, SkillName, Manifest, Resource
+│   ├── services/        # ManifestParser, TokenEstimator
+│   ├── repositories.py  # SkillRepository protocol
+│   └── exceptions.py    # Domain exceptions
+├── infrastructure/      # External concerns
+│   ├── mcp/             # SkillsMCPServer, SessionManager
+│   └── persistence/     # LocalSkillRepository, CachingDecorator
+└── __main__.py          # Entry point
 ```
 
-### Layer Dependencies
+### Layer Rules
 
-- **Domain**: Pure Python, NO external dependencies. MUST NOT import from other layers.
-- **Application**: MAY import from domain only.
-- **Infrastructure**: MAY import from domain and application.
-- **Interfaces**: MAY import from all layers.
+- **Domain**: Pure Python, NO external dependencies
+- **Infrastructure**: MAY import from domain
 
 ## Code Style
 
@@ -60,11 +52,9 @@ src/skills_mcp/
 ## Security Guidelines
 
 - Never commit secrets or API keys
-- Validate all external skill content before execution
-- Sandbox script execution
-- Use HTTPS for all remote skill fetching
-- Validate skill signatures when available
+- Validate all skill names against spec regex
 - Sanitize file paths to prevent traversal attacks
+- Use HTTPS for remote skill fetching (when implemented)
 
 ## Common Commands
 
