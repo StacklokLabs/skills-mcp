@@ -99,6 +99,9 @@ class Skill:
                 return self.references
             case ResourceType.ASSET:
                 return self.assets
+            case _:
+                # Exhaustive match - this should never be reached
+                return []
 
     @property
     def total_resource_tokens(self) -> int:
