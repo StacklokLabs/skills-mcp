@@ -2,22 +2,51 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-MCP server implementing the [Agent Skills specification](https://agentskills.io/specification).
+Serve [Agent Skills](https://agentskills.io/specification) over MCP with centralized hosting and token-efficient progressive disclosure.
 
-## Overview
+## Why This?
 
-Exposes Agent Skills as MCP resources with progressive disclosure:
-1. **Tier 1 (Metadata)**: Skill names and descriptions visible immediately
-2. **Tier 2 (Instructions)**: Full SKILL.md body loaded when skill is accessed
-3. **Tier 3 (Resources)**: Scripts, references, assets exposed on demand
+Agent Skills typically live as files in repositories (`.claude/skills/`, plugins, etc.). This server lets you:
+
+- **Host skills centrally** - Serve skills over HTTP to any MCP client without requiring local files
+- **Minimize token usage** - Progressive disclosure loads only what agents need, when they need it
+- **Isolate sessions** - Each client connection maintains its own expansion state
+
+## Progressive Disclosure
+
+Skills load in three tiers to optimize context usage:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  TIER 1: METADATA (~100 tokens/skill)                       │
+│  Agent sees: skill names and descriptions                   │
+└─────────────────────────────────────────────────────────────┘
+                          ↓ Agent reads a skill
+┌─────────────────────────────────────────────────────────────┐
+│  TIER 2: INSTRUCTIONS (<5000 tokens)                        │
+│  Agent gets: full SKILL.md body, sub-resources now visible  │
+└─────────────────────────────────────────────────────────────┘
+                          ↓ Agent needs a resource
+┌─────────────────────────────────────────────────────────────┐
+│  TIER 3: RESOURCES (on-demand)                              │
+│  Agent loads: scripts, references, assets as needed         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Example:** Initially 2 resources visible. After reading a skill, sub-resources appear:
+
+```
+Before:                          After reading skill:
+- skills://data-analysis         - skills://data-analysis
+- skills://code-review           - skills://data-analysis/scripts/analyze.py
+                                 - skills://data-analysis/references/GUIDE.md
+                                 - skills://code-review
+```
 
 ## Quick Start
 
 ```bash
-# Set skill paths (required)
-export SKILLS_MCP_PATHS="/path/to/skills:/another/path"
-
-# Run the server
+export SKILLS_MCP_PATHS="/path/to/skills"
 uv run skills-mcp
 ```
 
@@ -34,8 +63,6 @@ Connect from Claude Desktop (`claude_desktop_config.json`):
 ```
 
 ## Configuration
-
-Environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -54,6 +81,8 @@ uv run pytest
 uv run ruff check .
 uv run mypy src/
 ```
+
+See [docs/architecture/mcp-server-design.md](docs/architecture/mcp-server-design.md) for technical details.
 
 ## License
 
