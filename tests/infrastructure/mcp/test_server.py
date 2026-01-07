@@ -269,7 +269,7 @@ class TestSkillsMCPServerCallTool:
     async def test_validate_skill_path_not_exists(self, tmp_path: Path) -> None:
         """Should return error for non-existent path."""
         repo = AsyncMock()
-        server = SkillsMCPServer(repo)
+        server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
 
         result = await server._handle_call_tool(
             "validate_skill", {"path": str(tmp_path / "nonexistent")}
@@ -284,7 +284,7 @@ class TestSkillsMCPServerCallTool:
         file_path.write_text("test")
 
         repo = AsyncMock()
-        server = SkillsMCPServer(repo)
+        server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
 
         result = await server._handle_call_tool(
             "validate_skill", {"path": str(file_path)}
@@ -299,7 +299,7 @@ class TestSkillsMCPServerCallTool:
         skill_dir.mkdir()
 
         repo = AsyncMock()
-        server = SkillsMCPServer(repo)
+        server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
 
         result = await server._handle_call_tool(
             "validate_skill", {"path": str(skill_dir)}
@@ -325,7 +325,7 @@ Instructions here.
         )
 
         repo = AsyncMock()
-        server = SkillsMCPServer(repo)
+        server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
 
         result = await server._handle_call_tool(
             "validate_skill", {"path": str(skill_dir)}
@@ -334,6 +334,30 @@ Instructions here.
         assert len(result) == 1
         assert "Valid skill" in result[0].text
         assert "test-skill" in result[0].text
+
+    async def test_validate_skill_disabled_without_paths(self) -> None:
+        """Should return error when no allowed paths configured."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._handle_call_tool(
+            "validate_skill", {"path": "/some/path"}
+        )
+
+        assert len(result) == 1
+        assert "validation is disabled" in result[0].text
+
+    async def test_validate_skill_rejects_outside_path(self, tmp_path: Path) -> None:
+        """Should reject paths outside allowed directories."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
+
+        result = await server._handle_call_tool(
+            "validate_skill", {"path": "/etc/passwd"}
+        )
+
+        assert len(result) == 1
+        assert "outside allowed" in result[0].text
 
 
 class TestSkillsMCPServerMimeTypes:

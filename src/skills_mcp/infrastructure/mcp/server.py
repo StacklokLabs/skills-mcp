@@ -75,6 +75,7 @@ class SkillsMCPServer:
         repository: SkillRepository,
         *,
         session_manager: SessionManager | None = None,
+        allowed_validation_paths: list[Path] | None = None,
     ) -> None:
         """Initialize the MCP server.
 
@@ -82,11 +83,17 @@ class SkillsMCPServer:
             repository: The skill repository to serve.
             session_manager: Optional session manager. If not provided,
                 a new one is created.
+            allowed_validation_paths: Optional list of paths where validate_skill
+                tool is allowed to operate. If not provided, validation is disabled.
         """
         self._repository = repository
         self._session_manager = session_manager or SessionManager()
         self._server = Server("skills-mcp")
-        self._transport: StreamableHTTPServerTransport | None = None
+        self._allowed_validation_paths = (
+            [p.resolve() for p in allowed_validation_paths]
+            if allowed_validation_paths
+            else []
+        )
 
         # Register handlers
         self._register_handlers()
@@ -381,21 +388,24 @@ class SkillsMCPServer:
         Returns:
             Validation result message.
         """
-        skill_path = Path(path_str)
-        manifest_path = skill_path / "SKILL.md"
+        # Check if validation is enabled
+        if not self._allowed_validation_paths:
+            return "Error: Skill validation is disabled (no allowed paths configured)"
 
-        if not skill_path.exists():
-            return f"Error: Path does not exist: {path_str}"
+        skill_path = Path(path_str).resolve()
 
-        if not skill_path.is_dir():
-            return f"Error: Path is not a directory: {path_str}"
+        # Security check: ensure path is within allowed directories
+        if not self._is_validation_path_allowed(skill_path):
+            return "Error: Path is outside allowed validation directories"
 
-        if not manifest_path.exists():
-            return f"Error: SKILL.md not found in {path_str}"
+        # Validate path exists and is a directory with SKILL.md
+        error = self._check_skill_path(skill_path, path_str)
+        if error:
+            return error
 
         parser = ManifestParser()
         try:
-            manifest, body = parser.parse_file(manifest_path)
+            manifest, body = parser.parse_file(skill_path / "SKILL.md")
             return (
                 f"Valid skill: {manifest.name.value}\n"
                 f"Description: {manifest.description}\n"
@@ -403,6 +413,42 @@ class SkillsMCPServer:
             )
         except Exception as e:
             return f"Validation error: {e}"
+
+    def _check_skill_path(self, skill_path: Path, original_path: str) -> str | None:
+        """Check if skill path is valid.
+
+        Args:
+            skill_path: Resolved path to the skill directory.
+            original_path: Original path string for error messages.
+
+        Returns:
+            Error message if invalid, None if valid.
+        """
+        if not skill_path.exists():
+            return f"Error: Path does not exist: {original_path}"
+        if not skill_path.is_dir():
+            return f"Error: Path is not a directory: {original_path}"
+        if not (skill_path / "SKILL.md").exists():
+            return f"Error: SKILL.md not found in {original_path}"
+        return None
+
+    def _is_validation_path_allowed(self, path: Path) -> bool:
+        """Check if a path is within allowed validation directories.
+
+        Args:
+            path: The resolved path to check.
+
+        Returns:
+            True if path is allowed, False otherwise.
+        """
+        try:
+            resolved = path.resolve()
+            for allowed_path in self._allowed_validation_paths:
+                if resolved.is_relative_to(allowed_path):
+                    return True
+            return False
+        except (ValueError, OSError):
+            return False
 
     def _get_mime_type(self, filename: str) -> str:
         """Get MIME type for a filename.
@@ -471,7 +517,6 @@ class SkillsMCPServer:
                     _current_session_id.set(
                         self._session_manager.get_or_create().session_id
                     )
-                self._transport = transport
 
                 # Handle the request
                 async with transport.connect() as (read_stream, write_stream):
