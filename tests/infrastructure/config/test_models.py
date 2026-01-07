@@ -75,6 +75,12 @@ class TestOCISourceConfig:
         config = OCISourceConfig(cache_dir="~/.cache/test")
         assert config.cache_dir == Path.home() / ".cache" / "test"
 
+    def test_cache_dir_accepts_path_object(self) -> None:
+        """Should accept Path object for cache_dir."""
+        path = Path("/absolute/path/to/cache")
+        config = OCISourceConfig(cache_dir=path)
+        assert config.cache_dir == path
+
     def test_cache_ttl_validation(self) -> None:
         """Should reject negative cache_ttl."""
         with pytest.raises(ValueError):

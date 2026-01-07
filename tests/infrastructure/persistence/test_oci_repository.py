@@ -569,6 +569,128 @@ class TestPullWithOras:
             password="token",  # noqa: S106
         )
 
+    @patch("skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient")
+    def test_raises_on_oras_error(
+        self,
+        mock_client_class: MagicMock,
+        repo: OCISkillRepository,
+        tmp_path: Path,
+    ) -> None:
+        """Should raise exception when oras pull fails."""
+        mock_client = MagicMock()
+        mock_client_class.return_value = mock_client
+        mock_client.pull.side_effect = RuntimeError("Registry error")
+
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match="Registry error"):
+            repo._pull_with_oras(ref, output_dir)
+
+
+class TestAsyncErrorHandling:
+    """Tests for async error handling in pull operations."""
+
+    async def test_try_pull_skill_handles_oserror(
+        self, repo: OCISkillRepository
+    ) -> None:
+        """Should handle OSError gracefully and return None."""
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+
+        with patch.object(repo, "_pull_skill", side_effect=OSError("Disk full")):
+            result = await repo._try_pull_skill(ref)
+
+        assert result is None
+
+    async def test_try_pull_skill_handles_valueerror(
+        self, repo: OCISkillRepository
+    ) -> None:
+        """Should handle ValueError gracefully and return None."""
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+
+        with patch.object(repo, "_pull_skill", side_effect=ValueError("Invalid data")):
+            result = await repo._try_pull_skill(ref)
+
+        assert result is None
+
+    async def test_try_pull_skill_handles_unexpected_exception(
+        self, repo: OCISkillRepository
+    ) -> None:
+        """Should handle unexpected exceptions gracefully."""
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+
+        with patch.object(repo, "_pull_skill", side_effect=RuntimeError("Unexpected")):
+            result = await repo._try_pull_skill(ref)
+
+        assert result is None
+
+    async def test_pull_skill_handles_executor_oserror(
+        self, repo: OCISkillRepository
+    ) -> None:
+        """Should handle OSError from thread executor."""
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+        err = OSError("Permission denied")
+
+        with patch.object(repo, "_pull_with_oras", side_effect=err):
+            result = await repo._pull_skill(ref)
+
+        assert result is None
+
+    async def test_pull_skill_handles_executor_valueerror(
+        self, repo: OCISkillRepository
+    ) -> None:
+        """Should handle ValueError from thread executor."""
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+        err = ValueError("Bad tarball")
+
+        with patch.object(repo, "_pull_with_oras", side_effect=err):
+            result = await repo._pull_skill(ref)
+
+        assert result is None
+
+    async def test_pull_skill_handles_executor_runtime_error(
+        self, repo: OCISkillRepository
+    ) -> None:
+        """Should handle RuntimeError from thread executor."""
+        ref = OCISkillReference.from_string("ghcr.io/test/skill:v1.0.0")
+
+        with patch.object(repo, "_pull_with_oras", side_effect=RuntimeError("Network")):
+            result = await repo._pull_skill(ref)
+
+        assert result is None
+
+    async def test_load_skills_continues_on_individual_failure(
+        self, tmp_cache_dir: Path
+    ) -> None:
+        """Should continue loading other skills when one fails."""
+        config = OCIRepositoryConfig(
+            skills=[
+                OCISkillReference.from_string("ghcr.io/test/skill1:v1"),
+                OCISkillReference.from_string("ghcr.io/test/skill2:v1"),
+            ],
+            cache_dir=tmp_cache_dir,
+        )
+        repo = OCISkillRepository(config)
+
+        # First skill fails, second succeeds
+        call_count = 0
+
+        async def mock_try_pull(ref: OCISkillReference) -> MagicMock | None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return None  # First fails
+            mock_skill = MagicMock()
+            mock_skill.name.value = "skill2"
+            return mock_skill
+
+        with patch.object(repo, "_try_pull_skill", side_effect=mock_try_pull):
+            await repo._load_skills()
+
+        assert len(repo._skills_cache) == 1
+        assert "skill2" in repo._skills_cache
+
 
 class TestLoadSkillFromDir:
     """Tests for loading skills from extracted directories."""
