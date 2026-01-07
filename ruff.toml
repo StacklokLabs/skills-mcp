@@ -49,6 +49,7 @@ ignore = [
     "S101",   # Allow assert in tests
     "ARG001", # Allow unused arguments in tests (fixtures)
     "D",      # Don't require docstrings in tests
+    "PLR2004", # Allow magic values in tests
 ]
 
 [lint.isort]
