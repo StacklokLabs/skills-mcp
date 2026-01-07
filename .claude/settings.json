@@ -1,26 +1,26 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv *)",
-      "Bash(pytest *)",
-      "Bash(ruff *)",
-      "Bash(mypy *)",
-      "Bash(mkdocs *)",
+      "Bash(uv:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(mkdocs:*)",
       "Bash(git status)",
-      "Bash(git diff *)",
-      "Bash(git log *)",
-      "Bash(git branch *)",
-      "Bash(git checkout *)",
-      "Bash(git commit *)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)",
       "WebFetch(domain:agentskills.io)",
       "WebFetch(domain:modelcontextprotocol.io)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:pypi.org)"
     ],
     "deny": [
-      "Bash(rm -rf *)",
+      "Bash(rm -rf:*)",
       "Bash(git add -A)",
-      "Bash(git push --force *)"
+      "Bash(git push --force:*)"
     ]
   }
 }
