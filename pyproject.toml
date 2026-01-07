@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "MCP server implementing the Agent Skills specification"
 readme = "README.md"
 license = { text = "Apache-2.0" }
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [{ name = "Stacklok" }]
 keywords = ["mcp", "agent-skills", "ai", "llm"]
 classifiers = [
@@ -12,7 +12,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
@@ -27,6 +26,7 @@ dependencies = [
     "python-frontmatter>=1.1",
     "uvicorn>=0.30",
     "anyio>=4.0",
+    "oras>=0.2.25",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +36,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.8",
     "mypy>=1.13",
+    "types-PyYAML>=6.0",
 ]
 docs = [
     "mkdocs-material>=9.0",
@@ -68,7 +69,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -84,7 +85,7 @@ follow_imports = "silent"
 ignore_missing_imports = false
 
 [[tool.mypy.overrides]]
-module = ["frontmatter.*", "mcp.*", "tiktoken", "tiktoken.*", "uvicorn", "uvicorn.*"]
+module = ["frontmatter.*", "mcp.*", "tiktoken", "tiktoken.*", "uvicorn", "uvicorn.*", "oras", "oras.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]

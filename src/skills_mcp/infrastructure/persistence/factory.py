@@ -13,11 +13,21 @@ from pathlib import Path  # noqa: TC003 - used at runtime
 from typing import TYPE_CHECKING
 
 from skills_mcp.infrastructure.persistence.cache import CachingRepositoryDecorator
+from skills_mcp.infrastructure.persistence.composite_repository import (
+    CompositeSkillRepository,
+)
 from skills_mcp.infrastructure.persistence.local_repository import LocalSkillRepository
+from skills_mcp.infrastructure.persistence.oci_models import (
+    OCIAuthConfig,
+    OCIRepositoryConfig,
+    OCISkillReference,
+)
+from skills_mcp.infrastructure.persistence.oci_repository import OCISkillRepository
 
 
 if TYPE_CHECKING:
     from skills_mcp.domain.repositories import SkillRepository
+    from skills_mcp.infrastructure.config.models import SkillsConfig
 
 
 logger = logging.getLogger(__name__)
@@ -41,6 +51,9 @@ class SourceConfig:
         url: URL for git/oci sources (future).
         branch: Branch for git sources (future).
         tag: Tag for OCI sources (future).
+        oci_skills: List of OCI skill references for OCI sources.
+        oci_auth: Per-registry authentication for OCI sources.
+        oci_cache_dir: Cache directory for OCI sources.
     """
 
     source_type: SourceType
@@ -48,6 +61,9 @@ class SourceConfig:
     url: str | None = None
     branch: str | None = None
     tag: str | None = None
+    oci_skills: list[OCISkillReference] = field(default_factory=list)
+    oci_auth: dict[str, OCIAuthConfig] | None = None
+    oci_cache_dir: Path | None = None
 
 
 @dataclass
@@ -89,15 +105,12 @@ def create_repository(config: RepositoryConfig) -> SkillRepository:
         repo = _create_source_repository(source)
         repositories.append(repo)
 
-    # If multiple sources, combine them (future: CompositeSkillRepository)
+    # If multiple sources, combine them with CompositeSkillRepository
     if len(repositories) == 1:
         repo = repositories[0]
     else:
-        # For now, only support single source
-        # Future: implement CompositeSkillRepository
-        raise NotImplementedError(
-            "Multiple sources not yet supported. Use a single source for now."
-        )
+        repo = CompositeSkillRepository(repositories)
+        logger.info("Created composite repository with %d sources", len(repositories))
 
     # Wrap with caching if enabled
     if config.enable_caching:
@@ -141,10 +154,14 @@ def _create_source_repository(source: SourceConfig) -> SkillRepository:
             )
 
         case SourceType.OCI:
-            raise NotImplementedError(
-                "OCI registry support coming in a future release. "
-                "Track progress at https://github.com/stacklok/skills-mcp/issues"
+            if not source.oci_skills:
+                raise ValueError("OCI source requires at least one skill reference")
+            oci_config = OCIRepositoryConfig(
+                skills=source.oci_skills,
+                auth=source.oci_auth or {},
+                cache_dir=source.oci_cache_dir,
             )
+            return OCISkillRepository(oci_config)
 
 
 def create_local_repository(
@@ -171,4 +188,80 @@ def create_local_repository(
         skill_cache_size=skill_cache_size,
         resource_cache_size=resource_cache_size,
     )
+    return create_repository(config)
+
+
+def create_repository_from_skills_config(
+    skills_config: SkillsConfig,
+    *,
+    enable_caching: bool = True,
+    skill_cache_size: int = 100,
+    resource_cache_size: int = 500,
+) -> SkillRepository:
+    """Create a skill repository from a SkillsConfig.
+
+    This function creates the appropriate repositories based on the
+    configuration file settings (local and/or OCI sources).
+
+    Args:
+        skills_config: The parsed configuration.
+        enable_caching: Whether to enable caching.
+        skill_cache_size: Maximum number of skills to cache.
+        resource_cache_size: Maximum number of resources to cache.
+
+    Returns:
+        A configured SkillRepository instance.
+
+    Raises:
+        ValueError: If no sources are configured.
+    """
+    sources: list[SourceConfig] = []
+
+    # Add local sources if configured
+    if skills_config.has_local_sources() and skills_config.local is not None:
+        sources.append(
+            SourceConfig(
+                source_type=SourceType.LOCAL,
+                paths=skills_config.local.paths,
+            )
+        )
+
+    # Add OCI sources if configured
+    if skills_config.has_oci_sources() and skills_config.oci is not None:
+        oci_skills = [
+            OCISkillReference.from_string(skill.image)
+            for skill in skills_config.oci.skills
+        ]
+
+        # Convert auth config models to OCIAuthConfig
+        oci_auth: dict[str, OCIAuthConfig] = {}
+        for registry, auth_model in skills_config.oci.auth.items():
+            oci_auth[registry] = OCIAuthConfig(
+                registry=registry,
+                username=auth_model.username,
+                password=auth_model.password,
+            )
+
+        sources.append(
+            SourceConfig(
+                source_type=SourceType.OCI,
+                oci_skills=oci_skills,
+                oci_auth=oci_auth if oci_auth else None,
+                oci_cache_dir=skills_config.oci.cache_dir,
+            )
+        )
+
+    if not sources:
+        raise ValueError(
+            "No skill sources configured. "
+            "Add 'local' or 'oci' section to your configuration."
+        )
+
+    config = RepositoryConfig(
+        sources=sources,
+        enable_caching=enable_caching,
+        skill_cache_size=skill_cache_size,
+        resource_cache_size=resource_cache_size,
+    )
+
     return create_repository(config)

@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from skills_mcp.infrastructure.persistence.cache import CachingRepositoryDecorator
+from skills_mcp.infrastructure.persistence.composite_repository import (
+    CompositeSkillRepository,
+)
 from skills_mcp.infrastructure.persistence.factory import (
     RepositoryConfig,
     SourceConfig,
@@ -13,6 +16,8 @@ from skills_mcp.infrastructure.persistence.factory import (
     create_repository,
 )
 from skills_mcp.infrastructure.persistence.local_repository import LocalSkillRepository
+from skills_mcp.infrastructure.persistence.oci_models import OCISkillReference
+from skills_mcp.infrastructure.persistence.oci_repository import OCISkillRepository
 
 
 FIXTURES_PATH = Path(__file__).parent.parent.parent / "fixtures" / "skills"
@@ -59,17 +64,18 @@ class TestCreateRepository:
         with pytest.raises(ValueError, match="at least one path"):
             create_repository(config)
 
-    def test_create_repository_multiple_sources_raises(self) -> None:
-        """Should raise NotImplementedError for multiple sources."""
+    def test_create_repository_multiple_sources_creates_composite(self) -> None:
+        """Should create CompositeSkillRepository for multiple sources."""
         config = RepositoryConfig(
             sources=[
                 SourceConfig(source_type=SourceType.LOCAL, paths=[FIXTURES_PATH]),
                 SourceConfig(source_type=SourceType.LOCAL, paths=[FIXTURES_PATH]),
             ],
+            enable_caching=False,
         )
 
-        with pytest.raises(NotImplementedError, match="Multiple sources"):
-            create_repository(config)
+        repo = create_repository(config)
+        assert isinstance(repo, CompositeSkillRepository)
 
     def test_create_repository_git_source_raises(self) -> None:
         """Should raise NotImplementedError for git source."""
@@ -82,14 +88,25 @@ class TestCreateRepository:
         with pytest.raises(NotImplementedError, match="Git source"):
             create_repository(config)
 
-    def test_create_repository_oci_source_raises(self) -> None:
-        """Should raise NotImplementedError for OCI source."""
+    def test_create_repository_oci_source_without_skills_raises(self) -> None:
+        """Should raise ValueError for OCI source without skills."""
         config = RepositoryConfig(
-            sources=[SourceConfig(source_type=SourceType.OCI, url="ghcr.io/test")],
+            sources=[SourceConfig(source_type=SourceType.OCI)],
         )
 
-        with pytest.raises(NotImplementedError, match="OCI registry"):
+        with pytest.raises(ValueError, match="at least one skill reference"):
             create_repository(config)
+
+    def test_create_repository_oci_source_with_skills(self) -> None:
+        """Should create OCISkillRepository for OCI source with skills."""
+        skill_ref = OCISkillReference.from_string("ghcr.io/stacklok/test:v1")
+        config = RepositoryConfig(
+            sources=[SourceConfig(source_type=SourceType.OCI, oci_skills=[skill_ref])],
+            enable_caching=False,
+        )
+
+        repo = create_repository(config)
+        assert isinstance(repo, OCISkillRepository)
 
 
 class TestCreateLocalRepository:
