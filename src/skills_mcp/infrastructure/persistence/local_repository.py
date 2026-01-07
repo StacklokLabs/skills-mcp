@@ -204,9 +204,9 @@ class LocalSkillRepository:
         token_count = self._token_estimator.estimate(body)
 
         # Discover resources
-        scripts = await self._discover_resources(skill_dir / "scripts")
-        references = await self._discover_resources(skill_dir / "references")
-        assets = await self._discover_resources(skill_dir / "assets")
+        scripts = await self._discover_resources(skill_dir / "scripts", skill_dir)
+        references = await self._discover_resources(skill_dir / "references", skill_dir)
+        assets = await self._discover_resources(skill_dir / "assets", skill_dir)
 
         return Skill(
             manifest=manifest,
@@ -218,11 +218,14 @@ class LocalSkillRepository:
             token_count=token_count,
         )
 
-    async def _discover_resources(self, resource_dir: Path) -> list[SkillResource]:
+    async def _discover_resources(
+        self, resource_dir: Path, skill_dir: Path
+    ) -> list[SkillResource]:
         """Discover resources in a resource directory.
 
         Args:
             resource_dir: The directory to scan (scripts/, references/, or assets/).
+            skill_dir: The skill directory (for path safety checks).
 
         Returns:
             List of discovered resources.
@@ -240,11 +243,19 @@ class LocalSkillRepository:
                 continue
 
             try:
+                # Resolve the path and check for path traversal
+                resolved_path = item.resolve()
+                if not self._is_path_safe(resolved_path, skill_dir):
+                    logger.warning(
+                        "Skipping resource outside skill directory: %s", item
+                    )
+                    continue
+
                 # Estimate token count for the resource
                 content = item.read_bytes()
                 token_count = self._token_estimator.estimate_file(content)
 
-                resource = SkillResource.from_path(item.resolve(), token_count)
+                resource = SkillResource.from_path(resolved_path, token_count)
                 resources.append(resource)
             except Exception:
                 logger.exception("Failed to load resource: %s", item)
