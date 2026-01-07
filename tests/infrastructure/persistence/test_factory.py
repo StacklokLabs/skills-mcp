@@ -74,7 +74,9 @@ class TestCreateRepository:
     def test_create_repository_git_source_raises(self) -> None:
         """Should raise NotImplementedError for git source."""
         config = RepositoryConfig(
-            sources=[SourceConfig(source_type=SourceType.GIT, url="https://example.com")],
+            sources=[
+                SourceConfig(source_type=SourceType.GIT, url="https://example.com")
+            ],
         )
 
         with pytest.raises(NotImplementedError, match="Git source"):

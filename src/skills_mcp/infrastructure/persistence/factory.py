@@ -96,8 +96,7 @@ def create_repository(config: RepositoryConfig) -> SkillRepository:
         # For now, only support single source
         # Future: implement CompositeSkillRepository
         raise NotImplementedError(
-            "Multiple sources not yet supported. "
-            "Use a single source for now."
+            "Multiple sources not yet supported. Use a single source for now."
         )
 
     # Wrap with caching if enabled

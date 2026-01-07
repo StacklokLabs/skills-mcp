@@ -127,6 +127,7 @@ class SkillsMCPServer:
 
     def _register_handlers(self) -> None:
         """Register MCP protocol handlers."""
+
         # List resources handler
         @self._server.list_resources()  # type: ignore[no-untyped-call,untyped-decorator]
         async def list_resources() -> list[Resource]:

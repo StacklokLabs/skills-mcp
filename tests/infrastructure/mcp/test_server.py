@@ -149,7 +149,9 @@ class TestSkillsMCPServerReadResource:
         server = SkillsMCPServer(repo)
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
-        contents = await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
+        contents = await server._handle_read_resource(
+            f"{SKILL_URI_SCHEME}://test-skill"
+        )
 
         assert len(contents) == 1
         content = contents[0]

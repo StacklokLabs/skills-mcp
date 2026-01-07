@@ -351,9 +351,9 @@ class TestSessionManagerConcurrency:
                 with lock:
                     errors.append(e)
 
-        threads = [
-            threading.Thread(target=access_sessions) for _ in range(3)
-        ] + [threading.Thread(target=remove_sessions)]
+        threads = [threading.Thread(target=access_sessions) for _ in range(3)] + [
+            threading.Thread(target=remove_sessions)
+        ]
 
         for t in threads:
             t.start()
