@@ -46,6 +46,9 @@ logger = logging.getLogger(__name__)
 # URI scheme for skills
 SKILL_URI_SCHEME = "skills"
 
+# URI path structure: skills://{name}/{type}/{file} has 3 parts
+URI_RESOURCE_PARTS_COUNT = 3
+
 # Default HTTP settings
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
@@ -218,13 +221,17 @@ class SkillsMCPServer:
         if not parts or not parts[0]:
             raise ValueError(f"Invalid URI: {uri}")
 
+        # Security: reject path traversal attempts
+        if any(".." in part for part in parts):
+            raise ValueError(f"Invalid URI: path traversal not allowed: {uri}")
+
         skill_name = SkillNameClass(parts[0])
 
         if len(parts) == 1:
             # Reading skill instructions - this triggers expansion
             return await self._read_skill_instructions(skill_name)
 
-        if len(parts) == 3:  # noqa: PLR2004
+        if len(parts) == URI_RESOURCE_PARTS_COUNT:
             # Reading a sub-resource: {name}/{type}/{file}
             resource_type = parts[1]
             resource_name = parts[2]

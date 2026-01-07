@@ -220,6 +220,16 @@ class TestSkillsMCPServerReadResource:
         with pytest.raises(ValueError, match="Invalid URI scheme"):
             await server._handle_read_resource("http://example.com/skill")
 
+    async def test_read_uri_path_traversal_rejected(self) -> None:
+        """Should reject URIs with path traversal attempts."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        with pytest.raises(ValueError, match="path traversal not allowed"):
+            await server._handle_read_resource(
+                f"{SKILL_URI_SCHEME}://skill/../../../etc/passwd"
+            )
+
     async def test_read_invalid_uri_format(self) -> None:
         """Should raise ValueError for invalid URI format."""
         repo = AsyncMock()
