@@ -1,0 +1,176 @@
+version: "3"
+
+vars:
+  PYTHON_SRC: src
+  TESTS_DIR: tests
+  IMAGE_NAME: skills-mcp
+  IMAGE_TAG: '{{default "latest" .IMAGE_TAG}}'
+  REGISTRY: '{{default "" .REGISTRY}}'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  # ─────────────────────────────────────────────────────────────
+  # Installation
+  # ─────────────────────────────────────────────────────────────
+
+  install:
+    desc: Install project dependencies
+    cmds:
+      - uv sync
+
+  install:dev:
+    desc: Install with dev dependencies
+    cmds:
+      - uv sync --extra dev
+
+  install:all:
+    desc: Install all dependencies (dev + docs + tokens)
+    cmds:
+      - uv sync --all-extras
+
+  # ─────────────────────────────────────────────────────────────
+  # Testing
+  # ─────────────────────────────────────────────────────────────
+
+  test:
+    desc: Run tests
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  test:cov:
+    desc: Run tests with coverage report
+    cmds:
+      - uv run pytest --cov={{.PYTHON_SRC}}/skills_mcp --cov-report=term-missing {{.CLI_ARGS}}
+
+  test:cov:html:
+    desc: Run tests with HTML coverage report
+    cmds:
+      - uv run pytest --cov={{.PYTHON_SRC}}/skills_mcp --cov-report=html {{.CLI_ARGS}}
+      - echo "Coverage report generated at htmlcov/index.html"
+
+  # ─────────────────────────────────────────────────────────────
+  # Code Quality
+  # ─────────────────────────────────────────────────────────────
+
+  lint:
+    desc: Run linter (ruff check)
+    cmds:
+      - uv run ruff check {{.PYTHON_SRC}} {{.TESTS_DIR}} {{.CLI_ARGS}}
+
+  lint:fix:
+    desc: Run linter and fix issues
+    cmds:
+      - uv run ruff check --fix {{.PYTHON_SRC}} {{.TESTS_DIR}} {{.CLI_ARGS}}
+
+  format:
+    desc: Format code with ruff
+    cmds:
+      - uv run ruff format {{.PYTHON_SRC}} {{.TESTS_DIR}} {{.CLI_ARGS}}
+
+  format:check:
+    desc: Check code formatting without changes
+    cmds:
+      - uv run ruff format --check {{.PYTHON_SRC}} {{.TESTS_DIR}} {{.CLI_ARGS}}
+
+  typecheck:
+    desc: Run type checking with mypy
+    cmds:
+      - uv run mypy {{.PYTHON_SRC}} {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────────────────────
+  # Combined Checks
+  # ─────────────────────────────────────────────────────────────
+
+  check:
+    desc: Run all checks (lint, format, typecheck, test)
+    cmds:
+      - task: lint
+      - task: format:check
+      - task: typecheck
+      - task: test
+
+  ci:
+    desc: Run CI checks (same as check but with coverage)
+    cmds:
+      - task: lint
+      - task: format:check
+      - task: typecheck
+      - task: test:cov
+
+  # ─────────────────────────────────────────────────────────────
+  # Documentation
+  # ─────────────────────────────────────────────────────────────
+
+  docs:
+    desc: Serve documentation locally
+    cmds:
+      - uv run mkdocs serve {{.CLI_ARGS}}
+
+  docs:build:
+    desc: Build documentation
+    cmds:
+      - uv run mkdocs build {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────────────────────
+  # Running
+  # ─────────────────────────────────────────────────────────────
+
+  run:
+    desc: Run the MCP server (requires SKILLS_MCP_PATHS env var)
+    cmds:
+      - uv run skills-mcp {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────────────────────
+  # Building & Packaging
+  # ─────────────────────────────────────────────────────────────
+
+  build:
+    desc: Build the package
+    cmds:
+      - uv build
+
+  # ─────────────────────────────────────────────────────────────
+  # Container
+  # ─────────────────────────────────────────────────────────────
+
+  docker:build:
+    desc: Build container image
+    vars:
+      FULL_IMAGE: '{{if .REGISTRY}}{{.REGISTRY}}/{{end}}{{.IMAGE_NAME}}:{{.IMAGE_TAG}}'
+    cmds:
+      - docker build -t {{.FULL_IMAGE}} .
+
+  docker:run:
+    desc: Run container (mount skills with SKILLS_PATH env var)
+    vars:
+      FULL_IMAGE: '{{if .REGISTRY}}{{.REGISTRY}}/{{end}}{{.IMAGE_NAME}}:{{.IMAGE_TAG}}'
+      SKILLS_PATH: '{{default "./skills" .SKILLS_PATH}}'
+    cmds:
+      - |
+        docker run --rm -it \
+          -p 8080:8080 \
+          -v {{.SKILLS_PATH}}:/skills:ro \
+          -e SKILLS_MCP_PATHS=/skills \
+          {{.FULL_IMAGE}} {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────────────────────
+  # Cleanup
+  # ─────────────────────────────────────────────────────────────
+
+  clean:
+    desc: Clean build artifacts and caches
+    cmds:
+      - rm -rf dist/
+      - rm -rf build/
+      - rm -rf .pytest_cache/
+      - rm -rf .mypy_cache/
+      - rm -rf .ruff_cache/
+      - rm -rf htmlcov/
+      - rm -rf .coverage
+      - rm -rf site/
+      - find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+      - find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
