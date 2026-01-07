@@ -1,6 +1,7 @@
 """Tests for LocalSkillRepository."""
 
 import asyncio
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -239,10 +240,13 @@ description: A test skill
 
         # Mock stat to report a file size over the limit
         original_stat = Path.stat
+        # Cache resolved path as string to avoid Path comparison issues in Python 3.11
+        script_file_str = str(script_file.resolve())
 
-        def mock_stat(self: Path, **kwargs: object) -> object:
-            result = original_stat(self)
-            if self == script_file.resolve():
+        def mock_stat(path_self: Path, **kwargs: object) -> object:
+            result = original_stat(path_self)
+            # Compare using os.fspath to avoid Path.__eq__ issues in Python 3.11
+            if os.fspath(path_self) == script_file_str:
                 # Return a mock stat result with large size
                 class MockStat:
                     st_size = MAX_RESOURCE_SIZE_BYTES + 1
