@@ -28,12 +28,21 @@ class SkillNotFoundError(SkillError):
 class ResourceNotFoundError(SkillError):
     """Raised when a requested resource cannot be found within a skill."""
 
-    def __init__(self, skill_name: str, resource_type: str, resource_name: str) -> None:
+    def __init__(
+        self,
+        skill_name: str,
+        resource_type: str,
+        resource_name: str,
+        reason: str | None = None,
+    ) -> None:
         self.skill_name = skill_name
         self.resource_type = resource_type
         self.resource_name = resource_name
+        self.reason = reason
         msg = f"Resource not found: {resource_type}/{resource_name} "
         msg += f"in skill '{skill_name}'"
+        if reason:
+            msg += f" ({reason})"
         super().__init__(msg)
 
 

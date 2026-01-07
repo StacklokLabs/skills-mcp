@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 SKILL_MANIFEST_FILENAME = "SKILL.md"
 
+# Maximum resource size (10 MB) to prevent memory exhaustion
+MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024
+
 
 class LocalSkillRepository:
     """Repository that reads skills from local filesystem directories.
@@ -133,6 +136,13 @@ class LocalSkillRepository:
             raise ResourceNotFoundError(skill_name.value, resource_type, resource_name)
 
         try:
+            # Check file size to prevent memory exhaustion
+            file_size = resolved_path.stat().st_size
+            if file_size > MAX_RESOURCE_SIZE_BYTES:
+                reason = f"Resource too large: {file_size} > {MAX_RESOURCE_SIZE_BYTES}"
+                raise ResourceNotFoundError(
+                    skill_name.value, resource_type, resource_name, reason
+                )
             return resolved_path.read_bytes()
         except OSError as exc:
             raise ResourceNotFoundError(
