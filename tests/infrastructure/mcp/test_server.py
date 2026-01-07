@@ -1,7 +1,7 @@
 """Tests for MCP server."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,7 +11,6 @@ from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.infrastructure.mcp.server import (
     SKILL_URI_SCHEME,
     SkillsMCPServer,
-    _current_session_id,
 )
 
 
@@ -112,10 +111,11 @@ class TestSkillsMCPServerListResources:
         server = SkillsMCPServer(repo)
 
         # Set up session and mark skill as expanded
-        _current_session_id.set("test-session")
         server._session_manager.mark_expanded("test-session", SkillName("skill1"))
 
-        resources = await server._handle_list_resources()
+        # Mock _get_session_id to return our test session
+        with patch.object(server, "_get_session_id", return_value="test-session"):
+            resources = await server._handle_list_resources()
 
         # 1 skill + 1 script + 1 reference
         assert len(resources) == 3
@@ -147,13 +147,15 @@ class TestSkillsMCPServerReadResource:
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
         contents = await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
 
         assert len(contents) == 1
         content = contents[0]
-        assert content.mimeType == "text/markdown"
-        assert "Instructions here" in content.text
-        assert "<!-- tokens:" in content.text
+        assert content.mime_type == "text/markdown"
+        assert "Instructions here" in content.content
+        assert "<!-- tokens:" in content.content
 
     async def test_read_skill_not_found(self) -> None:
         """Should raise ValueError for unknown skill."""
@@ -177,9 +179,9 @@ class TestSkillsMCPServerReadResource:
 
         assert len(contents) == 1
         content = contents[0]
-        assert content.mimeType == "text/x-python"
-        assert "print('hello')" in content.text
-        assert "# tokens:" in content.text
+        assert content.mime_type == "text/x-python"
+        assert "print('hello')" in content.content
+        assert "# tokens:" in content.content
 
     async def test_read_reference_resource(self) -> None:
         """Should return reference content."""
@@ -193,11 +195,11 @@ class TestSkillsMCPServerReadResource:
 
         assert len(contents) == 1
         content = contents[0]
-        assert content.mimeType == "text/markdown"
-        assert "Guide" in content.text
+        assert content.mime_type == "text/markdown"
+        assert "Guide" in content.content
 
     async def test_read_binary_resource(self) -> None:
-        """Should return binary content as blob."""
+        """Should return binary content as bytes."""
         repo = AsyncMock()
         repo.get_resource_content.return_value = b"\x89PNG\r\n\x1a\n"  # PNG header
 
@@ -208,9 +210,9 @@ class TestSkillsMCPServerReadResource:
 
         assert len(contents) == 1
         content = contents[0]
-        assert content.mimeType == "application/octet-stream"
-        # Should have blob attribute (binary)
-        assert hasattr(content, "blob")
+        assert content.mime_type == "application/octet-stream"
+        # Content should be bytes for binary data
+        assert isinstance(content.content, bytes)
 
     async def test_read_invalid_uri_scheme(self) -> None:
         """Should raise ValueError for invalid URI scheme."""
@@ -426,12 +428,12 @@ class TestSkillsMCPServerNotifications:
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
-        _current_session_id.set("test-session")
 
-        # Mock the notification method
+        # Mock the notification method and session ID
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
-        await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
+        with patch.object(server, "_get_session_id", return_value="test-session"):
+            await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
 
         # Should have called the notification
         server._send_resources_list_changed.assert_called_once()
@@ -443,7 +445,6 @@ class TestSkillsMCPServerNotifications:
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
-        _current_session_id.set("test-session")
 
         # Pre-expand the skill
         server._session_manager.mark_expanded("test-session", SkillName("test-skill"))
@@ -451,28 +452,28 @@ class TestSkillsMCPServerNotifications:
         # Mock the notification method
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
-        await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
+        with patch.object(server, "_get_session_id", return_value="test-session"):
+            await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
 
         # Should NOT have called the notification (already expanded)
         server._send_resources_list_changed.assert_not_called()
 
-    async def test_read_skill_no_notification_without_session(self) -> None:
-        """Should not send notification when no session is active."""
+    async def test_read_skill_uses_default_session_when_no_context(self) -> None:
+        """Should use 'default' session when no request context available."""
         skill = create_mock_skill("test-skill")
         repo = AsyncMock()
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
-        # No session set (context var is None by default)
-        _current_session_id.set(None)
 
         # Mock the notification method
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
+        # _get_session_id returns "default" when no context
         await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
 
-        # Should NOT have called the notification (no session)
-        server._send_resources_list_changed.assert_not_called()
+        # Should still call notification (first access for "default" session)
+        server._send_resources_list_changed.assert_called_once()
 
 
 class TestSkillsMCPServerSessionIsolation:
@@ -496,17 +497,17 @@ class TestSkillsMCPServerSessionIsolation:
         server = SkillsMCPServer(repo)
 
         # Client A expands skill1
-        _current_session_id.set("client-a")
         server._session_manager.mark_expanded("client-a", SkillName("skill1"))
 
         # Client A should see skill1 sub-resources
-        resources_a = await server._handle_list_resources()
+        with patch.object(server, "_get_session_id", return_value="client-a"):
+            resources_a = await server._handle_list_resources()
         uris_a = [str(r.uri) for r in resources_a]
         assert f"{SKILL_URI_SCHEME}://skill1/scripts/helper.py" in uris_a
 
         # Client B has not expanded anything
-        _current_session_id.set("client-b")
-        resources_b = await server._handle_list_resources()
+        with patch.object(server, "_get_session_id", return_value="client-b"):
+            resources_b = await server._handle_list_resources()
         uris_b = [str(r.uri) for r in resources_b]
 
         # Client B should NOT see skill1 sub-resources
@@ -530,8 +531,8 @@ class TestSkillsMCPServerSessionIsolation:
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
         # Client A reads the skill (triggers expansion)
-        _current_session_id.set("client-a")
-        await server._handle_read_resource(f"{SKILL_URI_SCHEME}://shared-skill")
+        with patch.object(server, "_get_session_id", return_value="client-a"):
+            await server._handle_read_resource(f"{SKILL_URI_SCHEME}://shared-skill")
 
         # Client A should have skill expanded
         assert server._session_manager.is_expanded(

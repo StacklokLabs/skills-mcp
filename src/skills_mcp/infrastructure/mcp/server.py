@@ -6,23 +6,22 @@ with progressive disclosure.
 
 from __future__ import annotations
 
-import base64
-import contextvars
+import contextlib
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mcp.server import Server
-from mcp.server.lowlevel import NotificationOptions
-from mcp.server.streamable_http import StreamableHTTPServerTransport
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import (
-    BlobResourceContents,
     Resource,
     TextContent,
-    TextResourceContents,
     Tool,
 )
 from pydantic import AnyUrl
+from starlette.applications import Starlette
+from starlette.routing import Mount
 
 from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.domain.services.manifest_parser import ManifestParser
@@ -30,13 +29,11 @@ from skills_mcp.domain.services.token_estimator import estimate_tokens
 from skills_mcp.infrastructure.mcp.session import SessionManager
 
 
-# Context variable for request-scoped session ID (thread-safe)
-_current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "current_session_id", default=None
-)
-
-
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from starlette.types import Receive, Scope, Send
+
     from skills_mcp.domain.repositories import SkillRepository
 
 
@@ -53,6 +50,9 @@ URI_RESOURCE_PARTS_COUNT = 3
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 
+# MCP Session ID header name
+MCP_SESSION_ID_HEADER = "mcp-session-id"
+
 
 class SkillsMCPServer:
     """MCP server that exposes Agent Skills with progressive disclosure.
@@ -65,7 +65,8 @@ class SkillsMCPServer:
     Each MCP connection has isolated session state tracking which skills
     have been "expanded" (had their sub-resources revealed).
 
-    Uses Streamable HTTP transport for communication.
+    Uses Streamable HTTP transport for communication via the MCP SDK's
+    StreamableHTTPSessionManager for proper session handling.
 
     Example:
         repo = create_local_repository([Path("/skills")])
@@ -84,8 +85,8 @@ class SkillsMCPServer:
 
         Args:
             repository: The skill repository to serve.
-            session_manager: Optional session manager. If not provided,
-                a new one is created.
+            session_manager: Optional session manager for tracking expanded skills.
+                If not provided, a new one is created.
             allowed_validation_paths: Optional list of paths where validate_skill
                 tool is allowed to operate. If not provided, validation is disabled.
         """
@@ -97,9 +98,32 @@ class SkillsMCPServer:
             if allowed_validation_paths
             else []
         )
+        self._http_session_manager: StreamableHTTPSessionManager | None = None
 
         # Register handlers
         self._register_handlers()
+
+    def _get_session_id(self) -> str:
+        """Get the current MCP session ID from the request context.
+
+        The session ID is extracted from the mcp-session-id header which is
+        required on all requests after initialization per the MCP spec.
+
+        Returns:
+            The session ID string, or "default" if not available.
+        """
+        try:
+            # Access the Starlette Request object from request context
+            # This is set by StreamableHTTPServerTransport via ServerMessageMetadata
+            request = self._server.request_context.request
+            if request is not None and hasattr(request, "headers"):
+                session_id: str | None = request.headers.get(MCP_SESSION_ID_HEADER)
+                if session_id:
+                    return session_id
+        except LookupError:
+            # Outside of request context - this is expected during startup
+            logger.debug("No request context available for session ID")
+        return "default"
 
     def _register_handlers(self) -> None:
         """Register MCP protocol handlers."""
@@ -111,11 +135,9 @@ class SkillsMCPServer:
 
         # Read resource handler
         @self._server.read_resource()  # type: ignore[no-untyped-call,untyped-decorator]
-        async def read_resource(
-            uri: str,
-        ) -> list[TextResourceContents | BlobResourceContents]:
+        async def read_resource(uri: AnyUrl) -> list[ReadResourceContents]:
             """Read a skill or sub-resource."""
-            return await self._handle_read_resource(uri)
+            return await self._handle_read_resource(str(uri))
 
         # List tools handler
         @self._server.list_tools()  # type: ignore[no-untyped-call,untyped-decorator]
@@ -126,10 +148,10 @@ class SkillsMCPServer:
         # Call tool handler
         @self._server.call_tool()  # type: ignore[untyped-decorator]
         async def call_tool(
-            name: str, arguments: dict[str, Any]
+            name: str, arguments: dict[str, Any] | None
         ) -> list[TextContent]:
             """Execute a tool."""
-            return await self._handle_call_tool(name, arguments)
+            return await self._handle_call_tool(name, arguments or {})
 
     async def _handle_list_resources(self) -> list[Resource]:
         """Handle resources/list request.
@@ -142,6 +164,7 @@ class SkillsMCPServer:
         """
         resources: list[Resource] = []
         skills = await self._repository.list_all()
+        session_id = self._get_session_id()
 
         for skill in skills:
             # Always include skill-level resource
@@ -156,8 +179,7 @@ class SkillsMCPServer:
             )
 
             # Only include sub-resources if skill is expanded in this session
-            session_id = _current_session_id.get()
-            if session_id and self._session_manager.is_expanded(session_id, skill.name):
+            if self._session_manager.is_expanded(session_id, skill.name):
                 resources.extend(
                     Resource(
                         uri=AnyUrl(f"{skill_uri}/scripts/{script.name}"),
@@ -190,9 +212,7 @@ class SkillsMCPServer:
 
         return resources
 
-    async def _handle_read_resource(
-        self, uri: str
-    ) -> list[TextResourceContents | BlobResourceContents]:
+    async def _handle_read_resource(self, uri: str) -> list[ReadResourceContents]:
         """Handle resources/read request.
 
         When reading a skill-level resource, marks it as expanded
@@ -239,7 +259,7 @@ class SkillsMCPServer:
 
     async def _read_skill_instructions(
         self, skill_name: SkillName
-    ) -> list[TextResourceContents | BlobResourceContents]:
+    ) -> list[ReadResourceContents]:
         """Read skill instructions (SKILL.md body).
 
         Marks the skill as expanded and sends a list_changed notification.
@@ -255,25 +275,18 @@ class SkillsMCPServer:
             raise ValueError(f"Skill not found: {skill_name.value}")
 
         # Mark skill as expanded for this session
-        session_id = _current_session_id.get()
-        if session_id:
-            was_expanded = self._session_manager.is_expanded(session_id, skill_name)
-            self._session_manager.mark_expanded(session_id, skill_name)
+        session_id = self._get_session_id()
+        was_expanded = self._session_manager.is_expanded(session_id, skill_name)
+        self._session_manager.mark_expanded(session_id, skill_name)
 
-            # Send list_changed notification if this is a new expansion
-            if not was_expanded:
-                await self._send_resources_list_changed()
+        # Send list_changed notification if this is a new expansion
+        if not was_expanded:
+            await self._send_resources_list_changed()
 
         # Format body with token count header
         content = f"<!-- tokens: {skill.token_count} -->\n\n{skill.body}"
 
-        return [
-            TextResourceContents(
-                uri=AnyUrl(f"{SKILL_URI_SCHEME}://{skill_name.value}"),
-                mimeType="text/markdown",
-                text=content,
-            )
-        ]
+        return [ReadResourceContents(content=content, mime_type="text/markdown")]
 
     async def _send_resources_list_changed(self) -> None:
         """Send resources/list_changed notification to client."""
@@ -289,7 +302,7 @@ class SkillsMCPServer:
         skill_name: SkillName,
         resource_type: str,
         resource_name: str,
-    ) -> list[TextResourceContents | BlobResourceContents]:
+    ) -> list[ReadResourceContents]:
         """Read a skill sub-resource.
 
         Args:
@@ -316,28 +329,12 @@ class SkillsMCPServer:
             elif mime_type in ("text/markdown", "text/plain"):
                 text = f"<!-- tokens: {token_count} -->\n\n{text}"
 
-            resource_uri = AnyUrl(
-                f"{SKILL_URI_SCHEME}://{skill_name.value}/"
-                f"{resource_type}/{resource_name}"
-            )
-            return [
-                TextResourceContents(
-                    uri=resource_uri,
-                    mimeType=mime_type,
-                    text=text,
-                )
-            ]
+            return [ReadResourceContents(content=text, mime_type=mime_type)]
         except UnicodeDecodeError:
-            # Binary content - return as blob
-            resource_uri = AnyUrl(
-                f"{SKILL_URI_SCHEME}://{skill_name.value}/"
-                f"{resource_type}/{resource_name}"
-            )
+            # Binary content - return as bytes
             return [
-                BlobResourceContents(
-                    uri=resource_uri,
-                    mimeType="application/octet-stream",
-                    blob=base64.b64encode(content).decode("ascii"),
+                ReadResourceContents(
+                    content=content, mime_type="application/octet-stream"
                 )
             ]
 
@@ -479,71 +476,49 @@ class SkillsMCPServer:
         }
         return mime_types.get(ext, "text/plain")
 
-    def create_asgi_app(self) -> Any:
-        """Create an ASGI application for the MCP server.
+    def create_asgi_app(self) -> Starlette:
+        """Create a Starlette ASGI application for the MCP server.
+
+        Uses the MCP SDK's StreamableHTTPSessionManager for proper
+        session handling and transport management.
 
         Returns:
-            An ASGI application that handles MCP requests.
+            A Starlette application that handles MCP requests at /mcp.
         """
-        async def app(
-            scope: dict[str, Any],
-            receive: Any,
-            send: Any,
+        # Create the session manager for streamable HTTP
+        self._http_session_manager = StreamableHTTPSessionManager(
+            app=self._server,
+            json_response=False,  # Use SSE streaming
+            stateless=False,  # Maintain session state
+        )
+
+        # ASGI handler wrapper for the session manager
+        async def handle_mcp_request(
+            scope: Scope, receive: Receive, send: Send
         ) -> None:
-            """ASGI application entry point."""
-            if scope["type"] == "lifespan":
-                # Handle lifespan events
-                while True:
-                    message = await receive()
-                    if message["type"] == "lifespan.startup":
-                        await send({"type": "lifespan.startup.complete"})
-                    elif message["type"] == "lifespan.shutdown":
-                        await send({"type": "lifespan.shutdown.complete"})
-                        return
-            elif scope["type"] == "http":
-                # Extract session ID from headers
-                headers = dict(scope.get("headers", []))
-                session_id = headers.get(
-                    b"mcp-session-id", b""
-                ).decode("utf-8") or None
+            """Handle MCP requests via the session manager."""
+            await self._http_session_manager.handle_request(  # type: ignore[union-attr]
+                scope, receive, send
+            )
 
-                # Create transport for this request
-                transport = StreamableHTTPServerTransport(
-                    mcp_session_id=session_id,
-                    is_json_response_enabled=False,
-                )
+        @contextlib.asynccontextmanager
+        async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+            """Manage server lifecycle with the HTTP session manager."""
+            async with self._http_session_manager.run():  # type: ignore[union-attr]
+                logger.info("MCP session manager started")
+                yield
+                logger.info("MCP session manager stopped")
 
-                # Store session ID for handlers (using context var for thread safety)
-                if session_id:
-                    _current_session_id.set(session_id)
-                else:
-                    _current_session_id.set(
-                        self._session_manager.get_or_create().session_id
-                    )
-
-                # Handle the request
-                async with transport.connect() as (read_stream, write_stream):
-                    # Start the server in the background
-                    import anyio  # noqa: PLC0415
-
-                    async with anyio.create_task_group() as tg:
-                        async def run_server() -> None:
-                            await self._server.run(
-                                read_stream,
-                                write_stream,
-                                self._server.create_initialization_options(
-                                    notification_options=NotificationOptions(
-                                        resources_changed=True,
-                                    ),
-                                    experimental_capabilities={},
-                                ),
-                            )
-
-                        tg.start_soon(run_server)
-                        await transport.handle_request(scope, receive, send)
-                        tg.cancel_scope.cancel()
-
-        return app
+        # Create the Starlette app with routes
+        # Use Mount instead of Route because handle_request is an ASGI app,
+        # not an HTTP endpoint that returns a Response
+        return Starlette(
+            debug=False,
+            routes=[
+                Mount("/mcp", app=handle_mcp_request),
+            ],
+            lifespan=lifespan,
+        )
 
     async def run_http(
         self,
@@ -558,7 +533,7 @@ class SkillsMCPServer:
         """
         import uvicorn  # noqa: PLC0415
 
-        logger.info("Starting skills-mcp server on http://%s:%d", host, port)
+        logger.info("Starting skills-mcp server on http://%s:%d/mcp", host, port)
         app = self.create_asgi_app()
         config = uvicorn.Config(app, host=host, port=port, log_level="info")
         server = uvicorn.Server(config)
