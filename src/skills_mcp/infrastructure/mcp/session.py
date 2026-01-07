@@ -7,6 +7,7 @@ have been "expanded" (their sub-resources are visible).
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -93,6 +94,7 @@ class SessionManager:
         """
         self._sessions: dict[str, SessionState] = {}
         self._timeout = timeout
+        self._lock = threading.RLock()  # Reentrant lock for nested calls
 
     def get_or_create(self, session_id: str | None = None) -> SessionState:
         """Get an existing session or create a new one.
@@ -107,13 +109,14 @@ class SessionManager:
         if session_id is None:
             session_id = str(uuid.uuid4())
 
-        if session_id not in self._sessions:
-            self._sessions[session_id] = SessionState(session_id=session_id)
-            logger.debug("Created new session: %s", session_id)
+        with self._lock:
+            if session_id not in self._sessions:
+                self._sessions[session_id] = SessionState(session_id=session_id)
+                logger.debug("Created new session: %s", session_id)
 
-        session = self._sessions[session_id]
-        session.touch()
-        return session
+            session = self._sessions[session_id]
+            session.touch()
+            return session
 
     def get(self, session_id: str) -> SessionState | None:
         """Get an existing session by ID.
@@ -124,10 +127,11 @@ class SessionManager:
         Returns:
             The session state, or None if not found.
         """
-        session = self._sessions.get(session_id)
-        if session is not None:
-            session.touch()
-        return session
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                session.touch()
+            return session
 
     def mark_expanded(self, session_id: str, skill_name: SkillName) -> None:
         """Mark a skill as expanded in a session.
@@ -136,13 +140,14 @@ class SessionManager:
             session_id: The session ID.
             skill_name: The skill name to mark as expanded.
         """
-        session = self.get_or_create(session_id)
-        session.mark_expanded(skill_name)
-        logger.debug(
-            "Marked skill as expanded: session=%s, skill=%s",
-            session_id,
-            skill_name.value,
-        )
+        with self._lock:
+            session = self.get_or_create(session_id)
+            session.mark_expanded(skill_name)
+            logger.debug(
+                "Marked skill as expanded: session=%s, skill=%s",
+                session_id,
+                skill_name.value,
+            )
 
     def is_expanded(self, session_id: str, skill_name: SkillName) -> bool:
         """Check if a skill is expanded in a session.
@@ -154,10 +159,11 @@ class SessionManager:
         Returns:
             True if the skill is expanded, False otherwise.
         """
-        session = self._sessions.get(session_id)
-        if session is None:
-            return False
-        return session.is_expanded(skill_name)
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return False
+            return session.is_expanded(skill_name)
 
     def cleanup_expired(self) -> int:
         """Remove expired sessions.
@@ -165,20 +171,21 @@ class SessionManager:
         Returns:
             Number of sessions removed.
         """
-        now = datetime.now(UTC)
-        expired = [
-            sid
-            for sid, session in self._sessions.items()
-            if now - session.last_accessed > self._timeout
-        ]
+        with self._lock:
+            now = datetime.now(UTC)
+            expired = [
+                sid
+                for sid, session in self._sessions.items()
+                if now - session.last_accessed > self._timeout
+            ]
 
-        for sid in expired:
-            del self._sessions[sid]
+            for sid in expired:
+                del self._sessions[sid]
 
-        if expired:
-            logger.info("Cleaned up %d expired sessions", len(expired))
+            if expired:
+                logger.info("Cleaned up %d expired sessions", len(expired))
 
-        return len(expired)
+            return len(expired)
 
     def remove(self, session_id: str) -> bool:
         """Remove a specific session.
@@ -189,13 +196,15 @@ class SessionManager:
         Returns:
             True if the session was removed, False if not found.
         """
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            logger.debug("Removed session: %s", session_id)
-            return True
-        return False
+        with self._lock:
+            if session_id in self._sessions:
+                del self._sessions[session_id]
+                logger.debug("Removed session: %s", session_id)
+                return True
+            return False
 
     @property
     def session_count(self) -> int:
         """Return the number of active sessions."""
-        return len(self._sessions)
+        with self._lock:
+            return len(self._sessions)

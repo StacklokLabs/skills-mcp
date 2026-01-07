@@ -7,6 +7,7 @@ with progressive disclosure.
 from __future__ import annotations
 
 import base64
+import contextvars
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,12 @@ from pydantic import AnyUrl
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.domain.services.token_estimator import estimate_tokens
 from skills_mcp.infrastructure.mcp.session import SessionManager
+
+
+# Context variable for request-scoped session ID (thread-safe)
+_current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_session_id", default=None
+)
 
 
 if TYPE_CHECKING:
@@ -79,7 +86,6 @@ class SkillsMCPServer:
         self._repository = repository
         self._session_manager = session_manager or SessionManager()
         self._server = Server("skills-mcp")
-        self._current_session_id: str | None = None
         self._transport: StreamableHTTPServerTransport | None = None
 
         # Register handlers
@@ -140,9 +146,8 @@ class SkillsMCPServer:
             )
 
             # Only include sub-resources if skill is expanded in this session
-            if self._current_session_id and self._session_manager.is_expanded(
-                self._current_session_id, skill.name
-            ):
+            session_id = _current_session_id.get()
+            if session_id and self._session_manager.is_expanded(session_id, skill.name):
                 resources.extend(
                     Resource(
                         uri=AnyUrl(f"{skill_uri}/scripts/{script.name}"),
@@ -240,11 +245,10 @@ class SkillsMCPServer:
             raise ValueError(f"Skill not found: {skill_name.value}")
 
         # Mark skill as expanded for this session
-        if self._current_session_id:
-            was_expanded = self._session_manager.is_expanded(
-                self._current_session_id, skill_name
-            )
-            self._session_manager.mark_expanded(self._current_session_id, skill_name)
+        session_id = _current_session_id.get()
+        if session_id:
+            was_expanded = self._session_manager.is_expanded(session_id, skill_name)
+            self._session_manager.mark_expanded(session_id, skill_name)
 
             # Send list_changed notification if this is a new expansion
             if not was_expanded:
@@ -460,11 +464,11 @@ class SkillsMCPServer:
                     is_json_response_enabled=False,
                 )
 
-                # Store session ID for handlers
+                # Store session ID for handlers (using context var for thread safety)
                 if session_id:
-                    self._current_session_id = session_id
+                    _current_session_id.set(session_id)
                 else:
-                    self._current_session_id = (
+                    _current_session_id.set(
                         self._session_manager.get_or_create().session_id
                     )
                 self._transport = transport

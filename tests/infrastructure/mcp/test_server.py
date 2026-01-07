@@ -8,7 +8,11 @@ import pytest
 from skills_mcp.domain.models.resource import ResourceType, SkillResource
 from skills_mcp.domain.models.skill import Skill
 from skills_mcp.domain.models.skill_name import SkillName
-from skills_mcp.infrastructure.mcp.server import SKILL_URI_SCHEME, SkillsMCPServer
+from skills_mcp.infrastructure.mcp.server import (
+    SKILL_URI_SCHEME,
+    SkillsMCPServer,
+    _current_session_id,
+)
 
 
 def create_mock_manifest(name: str, description: str = "Test description") -> MagicMock:
@@ -108,7 +112,7 @@ class TestSkillsMCPServerListResources:
         server = SkillsMCPServer(repo)
 
         # Set up session and mark skill as expanded
-        server._current_session_id = "test-session"
+        _current_session_id.set("test-session")
         server._session_manager.mark_expanded("test-session", SkillName("skill1"))
 
         resources = await server._handle_list_resources()
@@ -388,7 +392,7 @@ class TestSkillsMCPServerNotifications:
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
-        server._current_session_id = "test-session"
+        _current_session_id.set("test-session")
 
         # Mock the notification method
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
@@ -405,7 +409,7 @@ class TestSkillsMCPServerNotifications:
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
-        server._current_session_id = "test-session"
+        _current_session_id.set("test-session")
 
         # Pre-expand the skill
         server._session_manager.mark_expanded("test-session", SkillName("test-skill"))
@@ -425,7 +429,8 @@ class TestSkillsMCPServerNotifications:
         repo.find_by_name.return_value = skill
 
         server = SkillsMCPServer(repo)
-        # No session set (server._current_session_id is None)
+        # No session set (context var is None by default)
+        _current_session_id.set(None)
 
         # Mock the notification method
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
@@ -457,7 +462,7 @@ class TestSkillsMCPServerSessionIsolation:
         server = SkillsMCPServer(repo)
 
         # Client A expands skill1
-        server._current_session_id = "client-a"
+        _current_session_id.set("client-a")
         server._session_manager.mark_expanded("client-a", SkillName("skill1"))
 
         # Client A should see skill1 sub-resources
@@ -466,7 +471,7 @@ class TestSkillsMCPServerSessionIsolation:
         assert f"{SKILL_URI_SCHEME}://skill1/scripts/helper.py" in uris_a
 
         # Client B has not expanded anything
-        server._current_session_id = "client-b"
+        _current_session_id.set("client-b")
         resources_b = await server._handle_list_resources()
         uris_b = [str(r.uri) for r in resources_b]
 
@@ -491,7 +496,7 @@ class TestSkillsMCPServerSessionIsolation:
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
         # Client A reads the skill (triggers expansion)
-        server._current_session_id = "client-a"
+        _current_session_id.set("client-a")
         await server._handle_read_resource(f"{SKILL_URI_SCHEME}://shared-skill")
 
         # Client A should have skill expanded
