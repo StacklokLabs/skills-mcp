@@ -5,6 +5,7 @@ Provides an LRU caching layer that can wrap any SkillRepository implementation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -62,6 +63,10 @@ class CachingRepositoryDecorator:
         self._skill_cache: OrderedDict[str, Skill | None] = OrderedDict()
         self._resource_cache: OrderedDict[str, bytes] = OrderedDict()
 
+        # Locks for thread-safe cache access
+        self._skill_lock = asyncio.Lock()
+        self._resource_lock = asyncio.Lock()
+
     async def list_all(self) -> list[Skill]:
         """List all available skills.
 
@@ -84,20 +89,23 @@ class CachingRepositoryDecorator:
         """
         cache_key = name.value
 
-        # Check cache first
-        if cache_key in self._skill_cache:
-            # Move to end (most recently used)
-            self._skill_cache.move_to_end(cache_key)
-            logger.debug("Cache hit for skill: %s", cache_key)
-            return self._skill_cache[cache_key]
+        # Check cache first (under lock)
+        async with self._skill_lock:
+            if cache_key in self._skill_cache:
+                # Move to end (most recently used)
+                self._skill_cache.move_to_end(cache_key)
+                logger.debug("Cache hit for skill: %s", cache_key)
+                return self._skill_cache[cache_key]
 
-        # Cache miss - fetch from inner repository
+        # Cache miss - fetch from inner repository (outside lock)
         logger.debug("Cache miss for skill: %s", cache_key)
         skill = await self._inner.find_by_name(name)
 
-        # Add to cache
-        self._skill_cache[cache_key] = skill
-        self._evict_skill_cache_if_needed()
+        # Add to cache (under lock, with double-check)
+        async with self._skill_lock:
+            if cache_key not in self._skill_cache:
+                self._skill_cache[cache_key] = skill
+                self._evict_skill_cache_if_needed()
 
         return skill
 
@@ -120,22 +128,25 @@ class CachingRepositoryDecorator:
         """
         cache_key = f"{skill_name.value}:{resource_type}:{resource_name}"
 
-        # Check cache first
-        if cache_key in self._resource_cache:
-            # Move to end (most recently used)
-            self._resource_cache.move_to_end(cache_key)
-            logger.debug("Cache hit for resource: %s", cache_key)
-            return self._resource_cache[cache_key]
+        # Check cache first (under lock)
+        async with self._resource_lock:
+            if cache_key in self._resource_cache:
+                # Move to end (most recently used)
+                self._resource_cache.move_to_end(cache_key)
+                logger.debug("Cache hit for resource: %s", cache_key)
+                return self._resource_cache[cache_key]
 
-        # Cache miss - fetch from inner repository
+        # Cache miss - fetch from inner repository (outside lock)
         logger.debug("Cache miss for resource: %s", cache_key)
         content = await self._inner.get_resource_content(
             skill_name, resource_type, resource_name
         )
 
-        # Add to cache
-        self._resource_cache[cache_key] = content
-        self._evict_resource_cache_if_needed()
+        # Add to cache (under lock, with double-check)
+        async with self._resource_lock:
+            if cache_key not in self._resource_cache:
+                self._resource_cache[cache_key] = content
+                self._evict_resource_cache_if_needed()
 
         return content
 
@@ -144,8 +155,10 @@ class CachingRepositoryDecorator:
 
         Clears all caches and delegates to the inner repository's refresh.
         """
-        self._skill_cache.clear()
-        self._resource_cache.clear()
+        async with self._skill_lock:
+            self._skill_cache.clear()
+        async with self._resource_lock:
+            self._resource_cache.clear()
         logger.info("Cleared skill and resource caches")
         await self._inner.refresh()
 
