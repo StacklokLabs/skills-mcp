@@ -8,6 +8,7 @@ import pytest
 
 from skills_mcp.infrastructure.config.parser import (
     ConfigError,
+    create_default_config,
     find_config_file,
     load_config,
     load_config_from_file,
@@ -203,3 +204,67 @@ class TestFindConfigFile:
         found = find_config_file([config_file])
 
         assert found == config_file
+
+
+class TestServerEnvOverrides:
+    """Tests for server environment variable overrides."""
+
+    def test_host_override(self) -> None:
+        """Should override host from SKILLS_MCP_HOST."""
+        with patch.dict(os.environ, {"SKILLS_MCP_HOST": "0.0.0.0"}):  # noqa: S104
+            config = create_default_config()
+
+        assert config.server.host == "0.0.0.0"  # noqa: S104
+
+    def test_port_override(self) -> None:
+        """Should override port from SKILLS_MCP_PORT."""
+        with patch.dict(os.environ, {"SKILLS_MCP_PORT": "9090"}):
+            config = create_default_config()
+
+        assert config.server.port == 9090
+
+    def test_log_level_override(self) -> None:
+        """Should override log level from SKILLS_MCP_LOG_LEVEL."""
+        with patch.dict(os.environ, {"SKILLS_MCP_LOG_LEVEL": "DEBUG"}):
+            config = create_default_config()
+
+        assert config.server.log_level == "DEBUG"
+
+    def test_log_level_normalized_to_uppercase(self) -> None:
+        """Should normalize log level to uppercase."""
+        with patch.dict(os.environ, {"SKILLS_MCP_LOG_LEVEL": "debug"}):
+            config = create_default_config()
+
+        assert config.server.log_level == "DEBUG"
+
+    def test_invalid_port_not_integer_raises(self) -> None:
+        """Should raise ConfigError for non-integer port."""
+        with (
+            patch.dict(os.environ, {"SKILLS_MCP_PORT": "not-a-number"}),
+            pytest.raises(ConfigError, match="must be a valid integer"),
+        ):
+            create_default_config()
+
+    def test_invalid_port_out_of_range_raises(self) -> None:
+        """Should raise ConfigError for port out of range."""
+        with (
+            patch.dict(os.environ, {"SKILLS_MCP_PORT": "99999"}),
+            pytest.raises(ConfigError, match="must be between 1 and 65535"),
+        ):
+            create_default_config()
+
+    def test_invalid_port_zero_raises(self) -> None:
+        """Should raise ConfigError for port 0."""
+        with (
+            patch.dict(os.environ, {"SKILLS_MCP_PORT": "0"}),
+            pytest.raises(ConfigError, match="must be between 1 and 65535"),
+        ):
+            create_default_config()
+
+    def test_invalid_log_level_raises(self) -> None:
+        """Should raise ConfigError for invalid log level."""
+        with (
+            patch.dict(os.environ, {"SKILLS_MCP_LOG_LEVEL": "INVALID"}),
+            pytest.raises(ConfigError, match="must be DEBUG, INFO, WARNING"),
+        ):
+            create_default_config()

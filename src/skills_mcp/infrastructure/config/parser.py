@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from skills_mcp.infrastructure.config.models import SkillsConfig
+from skills_mcp.infrastructure.config.models import ServerConfig, SkillsConfig
 
 
 class ConfigError(Exception):
@@ -25,6 +25,10 @@ class ConfigError(Exception):
 _ENV_VAR_PATTERN = re.compile(
     r"\$\{(?P<var>[A-Za-z_][A-Za-z0-9_]*)(?::-(?P<default>[^}]*))?\}"
 )
+
+# Valid port range
+_MIN_PORT = 1
+_MAX_PORT = 65535
 
 
 def _expand_env_vars(value: str) -> str:
@@ -84,21 +88,47 @@ def _apply_server_env_overrides(config: SkillsConfig) -> SkillsConfig:
 
     Environment variables take precedence over config file values:
     - SKILLS_MCP_HOST: Server host
-    - SKILLS_MCP_PORT: Server port
-    - SKILLS_MCP_LOG_LEVEL: Log level
+    - SKILLS_MCP_PORT: Server port (must be 1-65535)
+    - SKILLS_MCP_LOG_LEVEL: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
     Args:
         config: The loaded configuration.
 
     Returns:
         Configuration with env var overrides applied.
+
+    Raises:
+        ConfigError: If environment variable values are invalid.
     """
     if host := os.environ.get("SKILLS_MCP_HOST"):
         config.server.host = host
-    if port := os.environ.get("SKILLS_MCP_PORT"):
-        config.server.port = int(port)
+
+    if port_str := os.environ.get("SKILLS_MCP_PORT"):
+        try:
+            port = int(port_str)
+            if not (_MIN_PORT <= port <= _MAX_PORT):
+                raise ConfigError(
+                    f"SKILLS_MCP_PORT must be between {_MIN_PORT} and {_MAX_PORT}, "
+                    f"got {port}"
+                )
+            config.server.port = port
+        except ValueError as e:
+            raise ConfigError(
+                f"SKILLS_MCP_PORT must be a valid integer, got '{port_str}'"
+            ) from e
+
     if log_level := os.environ.get("SKILLS_MCP_LOG_LEVEL"):
-        config.server.log_level = log_level.upper()
+        try:
+            # Use Pydantic validation by re-creating ServerConfig
+            config.server = ServerConfig.model_validate(
+                {**config.server.model_dump(), "log_level": log_level.upper()}
+            )
+        except ValidationError as e:
+            raise ConfigError(
+                f"SKILLS_MCP_LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, "
+                f"or CRITICAL, got '{log_level}'"
+            ) from e
+
     return config
 
 

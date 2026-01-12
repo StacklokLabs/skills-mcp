@@ -7,7 +7,7 @@ The configuration supports both local filesystem and OCI registry sources.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -87,7 +87,15 @@ class ServerConfig(BaseModel):
 
     host: str = "127.0.0.1"
     port: Annotated[int, Field(ge=1, le=65535)] = 8080
-    log_level: str = "WARNING"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "WARNING"
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalize_log_level(cls, v: str) -> str:
+        """Normalize log level to uppercase."""
+        if isinstance(v, str):
+            return v.upper()
+        return v
 
 
 class SkillsConfig(BaseModel):
