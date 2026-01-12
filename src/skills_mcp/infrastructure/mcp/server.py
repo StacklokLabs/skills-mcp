@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import mimetypes
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -460,22 +461,17 @@ class SkillsMCPServer:
         Returns:
             The MIME type.
         """
-        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-        mime_types = {
-            "py": "text/x-python",
-            "js": "application/javascript",
-            "ts": "application/typescript",
-            "sh": "application/x-sh",
-            "bash": "application/x-sh",
-            "md": "text/markdown",
-            "json": "application/json",
-            "yaml": "application/x-yaml",
-            "yml": "application/x-yaml",
-            "txt": "text/plain",
-            "html": "text/html",
-            "css": "text/css",
-        }
-        return mime_types.get(ext, "text/plain")
+        mime_type, _ = mimetypes.guess_type(filename)
+        # Fallback for types mimetypes doesn't know well
+        if mime_type is None:
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            fallbacks = {
+                "ts": "application/typescript",
+                "yaml": "application/x-yaml",
+                "yml": "application/x-yaml",
+            }
+            mime_type = fallbacks.get(ext, "text/plain")
+        return mime_type
 
     def create_asgi_app(self) -> Starlette:
         """Create a Starlette ASGI application for the MCP server.

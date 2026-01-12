@@ -79,6 +79,29 @@ def _expand_env_vars_recursive(obj: Any) -> Any:
     return obj
 
 
+def _apply_server_env_overrides(config: SkillsConfig) -> SkillsConfig:
+    """Apply environment variable overrides to server configuration.
+
+    Environment variables take precedence over config file values:
+    - SKILLS_MCP_HOST: Server host
+    - SKILLS_MCP_PORT: Server port
+    - SKILLS_MCP_LOG_LEVEL: Log level
+
+    Args:
+        config: The loaded configuration.
+
+    Returns:
+        Configuration with env var overrides applied.
+    """
+    if host := os.environ.get("SKILLS_MCP_HOST"):
+        config.server.host = host
+    if port := os.environ.get("SKILLS_MCP_PORT"):
+        config.server.port = int(port)
+    if log_level := os.environ.get("SKILLS_MCP_LOG_LEVEL"):
+        config.server.log_level = log_level.upper()
+    return config
+
+
 def load_config(content: str) -> SkillsConfig:
     """Load configuration from a YAML string.
 
@@ -110,9 +133,12 @@ def load_config(content: str) -> SkillsConfig:
 
     # Validate with Pydantic
     try:
-        return SkillsConfig.model_validate(data)
+        config = SkillsConfig.model_validate(data)
     except ValidationError as e:
         raise ConfigError(f"Configuration validation error: {e}") from e
+
+    # Apply env var overrides for server settings
+    return _apply_server_env_overrides(config)
 
 
 def load_config_from_file(path: Path) -> SkillsConfig:
@@ -133,6 +159,15 @@ def load_config_from_file(path: Path) -> SkillsConfig:
         raise ConfigError(f"Cannot read configuration file '{path}': {e}") from e
 
     return load_config(content)
+
+
+def create_default_config() -> SkillsConfig:
+    """Create a default configuration with environment variable overrides.
+
+    Returns:
+        Default SkillsConfig with env var overrides applied.
+    """
+    return _apply_server_env_overrides(SkillsConfig())
 
 
 def find_config_file(search_paths: list[Path] | None = None) -> Path | None:

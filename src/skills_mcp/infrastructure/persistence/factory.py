@@ -73,13 +73,11 @@ class RepositoryConfig:
     Attributes:
         sources: List of source configurations.
         enable_caching: Whether to wrap repository with caching.
-        skill_cache_size: Maximum number of skills to cache.
         resource_cache_size: Maximum number of resources to cache.
     """
 
     sources: list[SourceConfig] = field(default_factory=list)
     enable_caching: bool = True
-    skill_cache_size: int = 100
     resource_cache_size: int = 500
 
 
@@ -116,12 +114,10 @@ def create_repository(config: RepositoryConfig) -> SkillRepository:
     if config.enable_caching:
         repo = CachingRepositoryDecorator(
             repo,
-            skill_cache_size=config.skill_cache_size,
             resource_cache_size=config.resource_cache_size,
         )
         logger.info(
-            "Created cached repository with skill_cache=%d, resource_cache=%d",
-            config.skill_cache_size,
+            "Created cached repository with resource_cache=%d",
             config.resource_cache_size,
         )
 
@@ -168,7 +164,6 @@ def create_local_repository(
     paths: list[Path],
     *,
     enable_caching: bool = True,
-    skill_cache_size: int = 100,
     resource_cache_size: int = 500,
 ) -> SkillRepository:
     """Convenience function to create a local repository.
@@ -176,7 +171,6 @@ def create_local_repository(
     Args:
         paths: List of directories to scan for skills.
         enable_caching: Whether to enable caching.
-        skill_cache_size: Maximum number of skills to cache.
         resource_cache_size: Maximum number of resources to cache.
 
     Returns:
@@ -185,7 +179,6 @@ def create_local_repository(
     config = RepositoryConfig(
         sources=[SourceConfig(source_type=SourceType.LOCAL, paths=paths)],
         enable_caching=enable_caching,
-        skill_cache_size=skill_cache_size,
         resource_cache_size=resource_cache_size,
     )
     return create_repository(config)
@@ -195,7 +188,6 @@ def create_repository_from_skills_config(
     skills_config: SkillsConfig,
     *,
     enable_caching: bool = True,
-    skill_cache_size: int = 100,
     resource_cache_size: int = 500,
 ) -> SkillRepository:
     """Create a skill repository from a SkillsConfig.
@@ -206,7 +198,6 @@ def create_repository_from_skills_config(
     Args:
         skills_config: The parsed configuration.
         enable_caching: Whether to enable caching.
-        skill_cache_size: Maximum number of skills to cache.
         resource_cache_size: Maximum number of resources to cache.
 
     Returns:
@@ -260,7 +251,6 @@ def create_repository_from_skills_config(
     config = RepositoryConfig(
         sources=sources,
         enable_caching=enable_caching,
-        skill_cache_size=skill_cache_size,
         resource_cache_size=resource_cache_size,
     )
 

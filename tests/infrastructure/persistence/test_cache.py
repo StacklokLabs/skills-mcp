@@ -25,10 +25,10 @@ def create_mock_skill(name: str) -> Skill:
 
 
 class TestCachingRepositoryDecoratorFindByName:
-    """Tests for find_by_name caching."""
+    """Tests for find_by_name (delegates to inner repo)."""
 
-    async def test_caches_found_skill(self) -> None:
-        """Should cache a found skill."""
+    async def test_delegates_to_inner_repo(self) -> None:
+        """Should delegate find_by_name to inner repository."""
         inner = AsyncMock()
         skill = create_mock_skill("test-skill")
         inner.find_by_name.return_value = skill
@@ -41,49 +41,21 @@ class TestCachingRepositoryDecoratorFindByName:
         assert result1 is skill
         assert inner.find_by_name.call_count == 1
 
-        # Second call should use cache
+        # Second call should also hit inner (no caching)
         result2 = await cached.find_by_name(name)
         assert result2 is skill
-        assert inner.find_by_name.call_count == 1  # No additional calls
+        assert inner.find_by_name.call_count == 2
 
-    async def test_caches_none_result(self) -> None:
-        """Should cache None results (skill not found)."""
+    async def test_returns_none_from_inner(self) -> None:
+        """Should return None when inner repo returns None."""
         inner = AsyncMock()
         inner.find_by_name.return_value = None
 
         cached = CachingRepositoryDecorator(inner)
         name = SkillName("nonexistent")
 
-        # First call
-        result1 = await cached.find_by_name(name)
-        assert result1 is None
-        assert inner.find_by_name.call_count == 1
-
-        # Second call should use cache
-        result2 = await cached.find_by_name(name)
-        assert result2 is None
-        assert inner.find_by_name.call_count == 1
-
-    async def test_lru_eviction(self) -> None:
-        """Should evict least recently used entries."""
-        inner = AsyncMock()
-        inner.find_by_name.side_effect = lambda n: create_mock_skill(n.value)
-
-        # Very small cache
-        cached = CachingRepositoryDecorator(inner, skill_cache_size=2)
-
-        # Fill cache with 2 skills
-        await cached.find_by_name(SkillName("skill1"))
-        await cached.find_by_name(SkillName("skill2"))
-        assert cached.skill_cache_size == 2
-
-        # Add third skill - should evict skill1
-        await cached.find_by_name(SkillName("skill3"))
-        assert cached.skill_cache_size == 2
-
-        # skill1 should be evicted, accessing it should hit inner
-        inner.find_by_name.reset_mock()
-        await cached.find_by_name(SkillName("skill1"))
+        result = await cached.find_by_name(name)
+        assert result is None
         assert inner.find_by_name.call_count == 1
 
 
@@ -145,25 +117,20 @@ class TestCachingRepositoryDecoratorGetResourceContent:
 class TestCachingRepositoryDecoratorRefresh:
     """Tests for refresh method."""
 
-    async def test_refresh_clears_all_caches(self) -> None:
-        """Should clear all caches on refresh."""
+    async def test_refresh_clears_resource_cache(self) -> None:
+        """Should clear resource cache on refresh."""
         inner = AsyncMock()
-        skill = create_mock_skill("test-skill")
-        inner.find_by_name.return_value = skill
         inner.get_resource_content.return_value = b"content"
 
         cached = CachingRepositoryDecorator(inner)
         name = SkillName("test-skill")
 
-        # Populate caches
-        await cached.find_by_name(name)
+        # Populate cache
         await cached.get_resource_content(name, "scripts", "test.py")
-        assert cached.skill_cache_size == 1
         assert cached.resource_cache_size == 1
 
-        # Refresh should clear caches
+        # Refresh should clear cache
         await cached.refresh()
-        assert cached.skill_cache_size == 0
         assert cached.resource_cache_size == 0
         inner.refresh.assert_called_once()
 

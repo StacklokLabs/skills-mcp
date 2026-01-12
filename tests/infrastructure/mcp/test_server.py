@@ -389,7 +389,8 @@ class TestSkillsMCPServerMimeTypes:
         repo = AsyncMock()
         server = SkillsMCPServer(repo)
 
-        assert server._get_mime_type("script.js") == "application/javascript"
+        # stdlib mimetypes returns text/javascript
+        assert server._get_mime_type("script.js") == "text/javascript"
 
     def test_get_mime_type_markdown(self) -> None:
         """Should return Markdown MIME type."""
@@ -410,7 +411,8 @@ class TestSkillsMCPServerMimeTypes:
         repo = AsyncMock()
         server = SkillsMCPServer(repo)
 
-        assert server._get_mime_type("file.xyz") == "text/plain"
+        # Use a truly unknown extension that mimetypes won't recognize
+        assert server._get_mime_type("file.zzz123unknown") == "text/plain"
 
     def test_get_mime_type_no_extension(self) -> None:
         """Should return text/plain for files without extension."""

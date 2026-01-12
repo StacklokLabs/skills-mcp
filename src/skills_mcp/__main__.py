@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from skills_mcp.infrastructure.config.parser import (
     ConfigError,
+    create_default_config,
     find_config_file,
     load_config_from_file,
 )
@@ -20,21 +21,20 @@ from skills_mcp.infrastructure.config.parser import (
 if TYPE_CHECKING:
     from skills_mcp.infrastructure.config.models import SkillsConfig
 
-from skills_mcp.infrastructure.mcp.server import (
-    DEFAULT_HOST,
-    DEFAULT_PORT,
-    SkillsMCPServer,
-)
+from skills_mcp.infrastructure.mcp.server import SkillsMCPServer
 from skills_mcp.infrastructure.persistence.factory import (
     create_local_repository,
     create_repository_from_skills_config,
 )
 
 
-def setup_logging() -> None:
-    """Set up logging configuration."""
-    level_str = os.environ.get("SKILLS_MCP_LOG_LEVEL", "WARNING").upper()
-    level = getattr(logging, level_str, logging.WARNING)
+def setup_logging(log_level: str) -> None:
+    """Set up logging configuration.
+
+    Args:
+        log_level: Logging level string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+    """
+    level = getattr(logging, log_level.upper(), logging.WARNING)
 
     logging.basicConfig(
         level=level,
@@ -67,15 +67,13 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--host",
-        default=os.environ.get("SKILLS_MCP_HOST", DEFAULT_HOST),
-        help=f"Host to bind to (default: {DEFAULT_HOST})",
+        help="Host to bind to (overrides config file and SKILLS_MCP_HOST env var)",
     )
 
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("SKILLS_MCP_PORT", str(DEFAULT_PORT))),
-        help=f"Port to bind to (default: {DEFAULT_PORT})",
+        help="Port to bind to (overrides config file and SKILLS_MCP_PORT env var)",
     )
 
     return parser.parse_args()
@@ -162,16 +160,23 @@ def load_configuration(config_path: Path | None) -> SkillsConfig | None:
 
 async def run_server() -> None:
     """Run the MCP server."""
-    setup_logging()
-    logger = logging.getLogger(__name__)
-
     args = parse_args()
 
-    # Try to load config file
+    # Load config (or create default with env var overrides)
     config = load_configuration(args.config)
+    if config is None:
+        config = create_default_config()
 
-    if config is not None:
-        # Create repository from config
+    # Set up logging using config (env vars already applied via parser)
+    setup_logging(config.server.log_level)
+    logger = logging.getLogger(__name__)
+
+    # CLI args override config (which already has env var overrides applied)
+    host = args.host if args.host is not None else config.server.host
+    port = args.port if args.port is not None else config.server.port
+
+    # Create repository
+    if config.has_local_sources() or config.has_oci_sources():
         try:
             repository = create_repository_from_skills_config(config)
         except ValueError as e:
@@ -184,9 +189,9 @@ async def run_server() -> None:
         repository = create_local_repository(paths, enable_caching=True)
 
     # Create and run server
-    logger.info("Starting skills-mcp server on %s:%d", args.host, args.port)
+    logger.info("Starting skills-mcp server on %s:%d", host, port)
     server = SkillsMCPServer(repository)
-    await server.run_http(host=args.host, port=args.port)
+    await server.run_http(host=host, port=port)
 
 
 def main() -> None:

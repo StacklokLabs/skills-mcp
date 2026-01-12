@@ -13,7 +13,7 @@ from skills_mcp.domain.exceptions import (
     SkillValidationError,
 )
 from skills_mcp.domain.models import Skill, SkillManifest, SkillName, SkillResource
-from skills_mcp.domain.repositories import SkillRepository, SkillSource
+from skills_mcp.domain.repositories import SkillRepository
 from skills_mcp.domain.services import ManifestParser, TokenEstimator
 
 
@@ -30,7 +30,6 @@ __all__ = [
     "SkillNotFoundError",
     "SkillRepository",
     "SkillResource",
-    "SkillSource",
     "SkillValidationError",
     "TokenEstimator",
 ]

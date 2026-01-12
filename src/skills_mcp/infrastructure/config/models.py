@@ -76,6 +76,20 @@ class OCISourceConfig(BaseModel):
         return Path(v).expanduser()
 
 
+class ServerConfig(BaseModel):
+    """Server configuration.
+
+    Attributes:
+        host: Host to bind to.
+        port: Port to bind to.
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+    """
+
+    host: str = "127.0.0.1"
+    port: Annotated[int, Field(ge=1, le=65535)] = 8080
+    log_level: str = "WARNING"
+
+
 class SkillsConfig(BaseModel):
     """Root configuration model for skills-mcp.
 
@@ -85,6 +99,7 @@ class SkillsConfig(BaseModel):
         version: Configuration schema version.
         local: Configuration for local filesystem sources.
         oci: Configuration for OCI registry sources.
+        server: Server configuration (host, port, log level).
 
     Example:
         ```yaml
@@ -104,12 +119,18 @@ class SkillsConfig(BaseModel):
             ghcr.io:
               username: ${GITHUB_USER}
               password: ${GITHUB_TOKEN}
+
+        server:
+          host: 0.0.0.0
+          port: 8080
+          log_level: INFO
         ```
     """
 
     version: str = "1"
     local: LocalSourceConfig | None = None
     oci: OCISourceConfig | None = None
+    server: ServerConfig = Field(default_factory=ServerConfig)
 
     def has_local_sources(self) -> bool:
         """Check if local sources are configured."""
