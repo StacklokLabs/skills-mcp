@@ -138,7 +138,7 @@ oci:
 
 #### Authentication
 
-Per-registry authentication:
+Per-registry authentication using environment variables:
 
 ```yaml
 oci:
@@ -150,6 +150,34 @@ oci:
       username: ${DOCKER_USER}
       password: ${DOCKER_TOKEN}
 ```
+
+#### File-Based Credentials (Docker Secrets Pattern)
+
+For environments like Docker Swarm or Kubernetes where credentials are mounted as files,
+you can use `username_file` and `password_file` instead of inline values:
+
+```yaml
+oci:
+  auth:
+    ghcr.io:
+      username_file: /run/secrets/github_user
+      password_file: /run/secrets/github_token
+```
+
+This is useful for:
+
+- **Kubernetes secrets**: Mounted as files in pods
+- **High-security environments**: Credentials never appear in config files or environment variables
+
+File reference fields:
+
+| Field | Description |
+|-------|-------------|
+| `username_file` | Path to file containing username (whitespace trimmed) |
+| `password_file` | Path to file containing password/token (whitespace trimmed) |
+
+**Note**: If both direct values (`username`/`password`) and file references are specified,
+file references take precedence.
 
 ## Validation
 

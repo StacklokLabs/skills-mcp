@@ -229,8 +229,8 @@ def create_repository_from_skills_config(
         for registry, auth_model in skills_config.oci.auth.items():
             oci_auth[registry] = OCIAuthConfig(
                 registry=registry,
-                username=auth_model.username,
-                password=auth_model.password,
+                username=auth_model.get_username(),
+                password=auth_model.get_password(),
             )
 
         sources.append(

@@ -31,13 +31,52 @@ class LocalSourceConfig(BaseModel):
 class OCIAuthConfig(BaseModel):
     """Authentication configuration for an OCI registry.
 
+    Supports both direct values and file references (for Docker secrets pattern).
+    File references take precedence over direct values if both are specified.
+
     Attributes:
         username: Username for authentication (optional).
         password: Password or token for authentication (optional).
+        username_file: Path to file containing username (optional).
+        password_file: Path to file containing password (optional).
     """
 
     username: str | None = None
     password: str | None = None
+    username_file: Path | None = None
+    password_file: Path | None = None
+
+    @field_validator("username_file", "password_file", mode="before")
+    @classmethod
+    def expand_file_paths(cls, v: str | Path | None) -> Path | None:
+        """Expand ~ in file paths."""
+        if v is None:
+            return None
+        return Path(v).expanduser()
+
+    def get_username(self) -> str | None:
+        """Get username, reading from file if username_file is set."""
+        if self.username_file is not None:
+            return self._read_credential_file(self.username_file, "username_file")
+        return self.username
+
+    def get_password(self) -> str | None:
+        """Get password, reading from file if password_file is set."""
+        if self.password_file is not None:
+            return self._read_credential_file(self.password_file, "password_file")
+        return self.password
+
+    @staticmethod
+    def _read_credential_file(path: Path, field_name: str) -> str:
+        """Read credential from file, stripping whitespace."""
+        try:
+            return path.read_text().strip()
+        except FileNotFoundError:
+            raise ValueError(f"{field_name}: file not found: {path}") from None
+        except PermissionError:
+            raise ValueError(f"{field_name}: permission denied: {path}") from None
+        except OSError as e:
+            raise ValueError(f"{field_name}: error reading {path}: {e}") from e
 
 
 class OCISkillConfig(BaseModel):

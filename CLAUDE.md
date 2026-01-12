@@ -30,8 +30,8 @@ src/skills_mcp/
 
 ### Layer Rules
 
-- **Domain**: Pure Python, NO external dependencies
-- **Infrastructure**: MAY import from domain
+- **Domain**: Core business logic and models
+- **Infrastructure**: External integrations (MCP server, persistence). MAY import from domain
 
 ## Code Style
 

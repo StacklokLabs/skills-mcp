@@ -242,9 +242,7 @@ class OCISkillRepository:
         logger.warning("No SKILL.md found in pulled artifact: %s", ref.full_ref)
         return None
 
-    def _pull_with_oras(
-        self, ref: OCISkillReference, output_dir: Path
-    ) -> list[str]:
+    def _pull_with_oras(self, ref: OCISkillReference, output_dir: Path) -> list[str]:
         """Pull artifact using oras library (synchronous).
 
         Args:
@@ -367,9 +365,7 @@ class OCISkillRepository:
             # Extract all members (filter="data" provides additional safety)
             tar.extractall(output_dir, filter="data")
 
-    async def _load_skill_from_dir(
-        self, skill_dir: Path, manifest_path: Path
-    ) -> Skill:
+    async def _load_skill_from_dir(self, skill_dir: Path, manifest_path: Path) -> Skill:
         """Load a skill from an extracted directory.
 
         Args:

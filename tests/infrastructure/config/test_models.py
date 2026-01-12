@@ -47,6 +47,62 @@ class TestOCIAuthConfig:
         assert config.username == "user"
         assert config.password == "pass"  # noqa: S105
 
+    def test_get_username_direct_value(self) -> None:
+        """Should return direct username value."""
+        config = OCIAuthConfig(username="myuser")
+        assert config.get_username() == "myuser"
+
+    def test_get_password_direct_value(self) -> None:
+        """Should return direct password value."""
+        config = OCIAuthConfig(password="mypass")  # noqa: S106
+        assert config.get_password() == "mypass"
+
+    def test_get_username_from_file(self, tmp_path: Path) -> None:
+        """Should read username from file."""
+        cred_file = tmp_path / "username"
+        cred_file.write_text("file-user\n")
+
+        config = OCIAuthConfig(username_file=cred_file)
+        assert config.get_username() == "file-user"
+
+    def test_get_password_from_file(self, tmp_path: Path) -> None:
+        """Should read password from file."""
+        cred_file = tmp_path / "password"
+        cred_file.write_text("file-pass\n")
+
+        config = OCIAuthConfig(password_file=cred_file)
+        assert config.get_password() == "file-pass"
+
+    def test_file_takes_precedence(self, tmp_path: Path) -> None:
+        """File reference should take precedence over direct value."""
+        cred_file = tmp_path / "password"
+        cred_file.write_text("from-file")
+
+        config = OCIAuthConfig(
+            password="direct-value",  # noqa: S106
+            password_file=cred_file,
+        )
+        assert config.get_password() == "from-file"
+
+    def test_strips_whitespace_from_file(self, tmp_path: Path) -> None:
+        """Should strip leading/trailing whitespace from file content."""
+        cred_file = tmp_path / "password"
+        cred_file.write_text("  secret-token  \n\n")
+
+        config = OCIAuthConfig(password_file=cred_file)
+        assert config.get_password() == "secret-token"
+
+    def test_file_not_found_raises(self, tmp_path: Path) -> None:
+        """Should raise ValueError when file doesn't exist."""
+        config = OCIAuthConfig(password_file=tmp_path / "nonexistent")
+        with pytest.raises(ValueError, match="file not found"):
+            config.get_password()
+
+    def test_expands_tilde_in_file_path(self) -> None:
+        """Should expand ~ in file paths."""
+        config = OCIAuthConfig(password_file="~/.secrets/token")  # noqa: S106
+        assert config.password_file == Path.home() / ".secrets" / "token"
+
 
 class TestOCISkillConfig:
     """Tests for OCISkillConfig."""
@@ -140,9 +196,7 @@ class TestSkillsConfig:
     def test_has_oci_sources_with_skills(self) -> None:
         """Should return True when OCI skills configured."""
         config = SkillsConfig(
-            oci=OCISourceConfig(
-                skills=[OCISkillConfig(image="ghcr.io/org/skill:v1")]
-            )
+            oci=OCISourceConfig(skills=[OCISkillConfig(image="ghcr.io/org/skill:v1")])
         )
         assert config.has_oci_sources() is True
 
@@ -164,8 +218,6 @@ class TestSkillsConfig:
     def test_is_empty_with_oci(self) -> None:
         """Should return False when OCI sources configured."""
         config = SkillsConfig(
-            oci=OCISourceConfig(
-                skills=[OCISkillConfig(image="ghcr.io/org/skill:v1")]
-            )
+            oci=OCISourceConfig(skills=[OCISkillConfig(image="ghcr.io/org/skill:v1")])
         )
         assert config.is_empty() is False

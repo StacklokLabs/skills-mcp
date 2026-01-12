@@ -384,9 +384,7 @@ class OCIImageIndex:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> OCIImageIndex:
         """Create from dictionary."""
-        manifests = [
-            OCIDescriptor.from_dict(m) for m in data.get("manifests", [])
-        ]
+        manifests = [OCIDescriptor.from_dict(m) for m in data.get("manifests", [])]
         return cls(
             schema_version=data.get("schemaVersion", 2),
             media_type=data.get("mediaType", MEDIA_TYPE_IMAGE_INDEX),

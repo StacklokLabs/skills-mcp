@@ -130,9 +130,7 @@ class TestGetResourceContent:
         repo._skills_cache = {}
 
         with pytest.raises(SkillNotFoundError):
-            await repo.get_resource_content(
-                SkillName("missing"), "scripts", "test.py"
-            )
+            await repo.get_resource_content(SkillName("missing"), "scripts", "test.py")
 
     async def test_raises_for_invalid_resource_type(
         self, repo: OCISkillRepository, tmp_path: Path
@@ -339,9 +337,7 @@ class TestExtractTarball:
         with pytest.raises(ValueError, match="Unsafe path"):
             repo._extract_tarball(tarball, output_dir)
 
-    def test_rejects_symlinks(
-        self, repo: OCISkillRepository, tmp_path: Path
-    ) -> None:
+    def test_rejects_symlinks(self, repo: OCISkillRepository, tmp_path: Path) -> None:
         """Should reject tarball containing symlinks."""
         tarball = self.create_tarball(
             tmp_path,
@@ -353,9 +349,7 @@ class TestExtractTarball:
         with pytest.raises(ValueError, match="Symlink not allowed"):
             repo._extract_tarball(tarball, output_dir)
 
-    def test_rejects_hardlinks(
-        self, repo: OCISkillRepository, tmp_path: Path
-    ) -> None:
+    def test_rejects_hardlinks(self, repo: OCISkillRepository, tmp_path: Path) -> None:
         """Should reject tarball containing hardlinks."""
         tarball = self.create_tarball(
             tmp_path,
@@ -381,9 +375,7 @@ class TestExtractTarball:
         with pytest.raises(ValueError, match="Device file not allowed"):
             repo._extract_tarball(tarball, output_dir)
 
-    def test_rejects_fifo(
-        self, repo: OCISkillRepository, tmp_path: Path
-    ) -> None:
+    def test_rejects_fifo(self, repo: OCISkillRepository, tmp_path: Path) -> None:
         """Should reject tarball containing FIFOs."""
         tarball = self.create_tarball(
             tmp_path,
@@ -400,8 +392,7 @@ class TestExtractTarball:
     ) -> None:
         """Should reject tarball with too many files."""
         members = [
-            (f"file_{i}.txt", b"content", "file")
-            for i in range(MAX_TARBALL_FILES + 1)
+            (f"file_{i}.txt", b"content", "file") for i in range(MAX_TARBALL_FILES + 1)
         ]
         tarball = self.create_tarball(tmp_path, members)
         output_dir = tmp_path / "output"
@@ -510,7 +501,9 @@ class TestGetSkillCacheDir:
 class TestPullWithOras:
     """Tests for oras pull integration."""
 
-    @patch("skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient")
+    @patch(
+        "skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient"
+    )
     def test_pulls_artifact(
         self,
         mock_client_class: MagicMock,
@@ -528,12 +521,12 @@ class TestPullWithOras:
 
         repo._pull_with_oras(ref, output_dir)
 
-        mock_client_class.assert_called_once_with(
-            hostname="ghcr.io", insecure=False
-        )
+        mock_client_class.assert_called_once_with(hostname="ghcr.io", insecure=False)
         mock_client.pull.assert_called_once()
 
-    @patch("skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient")
+    @patch(
+        "skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient"
+    )
     def test_authenticates_when_configured(
         self,
         mock_client_class: MagicMock,
@@ -569,7 +562,9 @@ class TestPullWithOras:
             password="token",  # noqa: S106
         )
 
-    @patch("skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient")
+    @patch(
+        "skills_mcp.infrastructure.persistence.oci_repository.oras.client.OrasClient"
+    )
     def test_raises_on_oras_error(
         self,
         mock_client_class: MagicMock,
@@ -763,8 +758,6 @@ class TestDiscoverResources:
         skill_dir = tmp_path / "skill"
         skill_dir.mkdir()
 
-        resources = await repo._discover_resources(
-            skill_dir / "nonexistent", skill_dir
-        )
+        resources = await repo._discover_resources(skill_dir / "nonexistent", skill_dir)
 
         assert resources == []
