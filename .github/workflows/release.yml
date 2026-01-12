@@ -67,9 +67,9 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           images=""
-          for tag in ${TAGS}; do
+          while IFS= read -r tag; do
             images+="${tag}@${DIGEST} "
-          done
+          done <<< "$TAGS"
           cosign sign --yes ${images}
 
       - name: Generate release notes
@@ -84,9 +84,9 @@ jobs:
           echo "" >> notes.md
           echo "### Available Tags" >> notes.md
           echo "" >> notes.md
-          for tag in ${{ steps.meta.outputs.tags }}; do
+          while IFS= read -r tag; do
             echo "- \`${tag}\`" >> notes.md
-          done
+          done <<< "${{ steps.meta.outputs.tags }}"
           echo "" >> notes.md
           echo "### Verification" >> notes.md
           echo "" >> notes.md
