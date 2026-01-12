@@ -1,0 +1,188 @@
+"""E2E test fixtures for server subprocess management and MCP client."""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import socket
+import subprocess
+import sys
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, closing
+from dataclasses import dataclass
+from pathlib import Path
+
+import httpx
+import pytest
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+
+# Path to test skill fixtures
+FIXTURES_PATH = Path(__file__).parent.parent / "fixtures" / "skills"
+
+
+def find_free_port() -> int:
+    """Find a free TCP port on localhost.
+
+    Uses ephemeral port binding to avoid conflicts.
+    """
+    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+        s.bind(("127.0.0.1", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return int(s.getsockname()[1])
+
+
+@dataclass
+class ServerInfo:
+    """Information about a running server instance."""
+
+    process: subprocess.Popen[str]
+    host: str
+    port: int
+
+    @property
+    def url(self) -> str:
+        """Return the base server URL."""
+        return f"http://{self.host}:{self.port}"
+
+    @property
+    def mcp_url(self) -> str:
+        """Return the MCP endpoint URL."""
+        return f"{self.url}/mcp"
+
+
+async def wait_for_server_ready(url: str, timeout: float = 10.0) -> None:
+    """Wait for server to accept connections.
+
+    Uses exponential backoff to poll the server.
+
+    Args:
+        url: Base server URL (without /mcp path).
+        timeout: Maximum time to wait in seconds.
+
+    Raises:
+        TimeoutError: If server doesn't respond within timeout.
+    """
+    start = asyncio.get_event_loop().time()
+    delay = 0.1
+    max_delay = 1.0
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"Server at {url} did not become ready within {timeout}s"
+                )
+
+            try:
+                # Try a simple HTTP request to the /mcp endpoint
+                # Any response (even 4xx/5xx) means server is up
+                await client.get(f"{url}/mcp", timeout=1.0)
+                return
+            except (httpx.ConnectError, httpx.TimeoutException):
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, max_delay)
+
+
+async def shutdown_server(server_info: ServerInfo, timeout: float = 5.0) -> None:
+    """Gracefully shutdown the server subprocess.
+
+    Sends SIGTERM first, then SIGKILL if needed.
+
+    Args:
+        server_info: Server instance to shutdown.
+        timeout: Maximum time to wait for graceful shutdown.
+    """
+    process = server_info.process
+
+    if process.poll() is not None:
+        # Already terminated
+        return
+
+    # Send SIGTERM for graceful shutdown
+    process.terminate()
+
+    try:
+        # Wait for graceful shutdown
+        loop = asyncio.get_event_loop()
+        await asyncio.wait_for(
+            loop.run_in_executor(None, process.wait),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        # Force kill if graceful shutdown failed
+        process.kill()
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, process.wait)
+
+
+@pytest.fixture
+async def e2e_server() -> AsyncIterator[ServerInfo]:
+    """Start and manage the skills-mcp server subprocess.
+
+    Uses the test fixtures directory for skills.
+    Waits for server to be ready before yielding.
+    Gracefully shuts down on cleanup.
+    """
+    port = find_free_port()
+    host = "127.0.0.1"
+
+    # Start server using SKILLS_MCP_PATHS environment variable
+    env = {
+        **os.environ,
+        "SKILLS_MCP_PATHS": str(FIXTURES_PATH),
+    }
+
+    process = subprocess.Popen(  # noqa: ASYNC220, S603
+        [sys.executable, "-m", "skills_mcp", "--host", host, "--port", str(port)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    server_info = ServerInfo(
+        process=process,
+        host=host,
+        port=port,
+    )
+
+    try:
+        # Wait for server to be ready
+        await wait_for_server_ready(server_info.url, timeout=10.0)
+        yield server_info
+    finally:
+        # Graceful shutdown
+        await shutdown_server(server_info)
+
+
+# Type alias for the client factory
+ClientFactory = Callable[[], AbstractAsyncContextManager[ClientSession]]
+
+
+@pytest.fixture
+def mcp_client_factory(e2e_server: ServerInfo) -> ClientFactory:
+    """Factory for creating multiple independent MCP client sessions.
+
+    Use this for session isolation tests where you need multiple clients.
+    Each call creates a completely new HTTP connection with its own session ID.
+
+    Returns:
+        An async context manager factory that yields ClientSession instances.
+    """
+
+    @asynccontextmanager
+    async def create_client() -> AsyncIterator[ClientSession]:
+        # Cannot combine these context managers due to tuple unpacking
+        async with streamable_http_client(e2e_server.mcp_url) as (  # noqa: SIM117
+            read,
+            write,
+            _,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                yield session
+
+    return create_client
