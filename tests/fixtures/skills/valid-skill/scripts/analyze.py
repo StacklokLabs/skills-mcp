@@ -12,4 +12,4 @@ def analyze(data: str) -> dict:
 
 if __name__ == "__main__":
     result = analyze("Hello, world!")
-    print(result)  # noqa: T201
+    print(result)
