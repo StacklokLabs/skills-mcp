@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -347,19 +348,28 @@ class SkillsMCPServer:
         """
         return [
             Tool(
-                name="validate_skill",
-                description="Validate a skill directory against the Agent Skills spec",
+                name="understand_skills_available",
+                description="Mandatory first step before answering new user requests. Call this for every new question or request to refresh the list of skills available. These skills are necessary to help users complete tasks. This tool does not validate a skill, it only helps you understand what skills are available to you. YOU MUST CALL THIS TOOL WHENEVER A USER ASKS FOR A NEW TASK OR QUESTION. If a skill is related, call read_skill to read its instructions and follow them exactly.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            ),
+            Tool(
+                name="read_skill",
+                description="Read a skill directory against the Agent Skills spec",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "path": {
+                        "name": {
                             "type": "string",
-                            "description": "Path to the skill directory to validate",
+                            "description": "Name of the skill to read",
                         }
                     },
-                    "required": ["path"],
+                    "required": ["name"],
                 },
-            )
+            ),
         ]
 
     async def _handle_call_tool(
@@ -374,33 +384,54 @@ class SkillsMCPServer:
         Returns:
             The tool result.
         """
-        if name == "validate_skill":
-            result = await self._validate_skill(arguments.get("path", ""))
+        if name == "read_skill":
+            result = await self._read_skill(arguments.get("name", ""))
+            return [TextContent(type="text", text=result)]
+        if name == "understand_skills_available":
+            skills = await self._repository.list_all()
+            skill_list = (
+                "\n".join(
+                    f"- {skill.name.value}: {skill.manifest.description_short}"
+                    for skill in skills
+                )
+                or "No skills available."
+            )
+            result = (
+                "The following skills are available:\n\n"
+                f"{skill_list}\n\n"
+                "If one sounds at all promising, use list MCP resources to explore them further."
+                "If one is a perfect match, read its instructions and follow the instructions exactly."
+            )
             return [TextContent(type="text", text=result)]
 
         raise ValueError(f"Unknown tool: {name}")
 
-    async def _validate_skill(self, path_str: str) -> str:
-        """Validate a skill directory.
+    async def _read_skill(self, name: str) -> str:
+        """Read a skill directory.
 
         Args:
-            path_str: Path to the skill directory.
+            name: Name of the skill to read.
 
         Returns:
-            Validation result message.
+            Read result message.
         """
+        raw_path = os.environ.get(
+            "SKILLS_MCP_PATHS",
+            "/Users/laurel/Documents/code/anthropic-skills/skills",
+        )
+        path_str = Path(raw_path) / name
         # Check if validation is enabled
-        if not self._allowed_validation_paths:
-            return "Error: Skill validation is disabled (no allowed paths configured)"
+        # if not self._allowed_validation_paths:
+        #     return "Error: Skill validation is disabled (no allowed paths configured)"
 
-        skill_path = Path(path_str).resolve()
+        skill_path = path_str.resolve()
 
-        # Security check: ensure path is within allowed directories
-        if not self._is_validation_path_allowed(skill_path):
-            return "Error: Path is outside allowed validation directories"
+        # # Security check: ensure path is within allowed directories
+        # if not self._is_validation_path_allowed(skill_path):
+        #     return "Error: Path is outside allowed validation directories"
 
         # Validate path exists and is a directory with SKILL.md
-        error = self._check_skill_path(skill_path, path_str)
+        error = self._check_skill_path(skill_path, raw_path)
         if error:
             return error
 
@@ -410,7 +441,9 @@ class SkillsMCPServer:
             return (
                 f"Valid skill: {manifest.name.value}\n"
                 f"Description: {manifest.description}\n"
-                f"Body length: {len(body)} characters"
+                f"Body length: {len(body)} characters\n\n"
+                "--------------------------------------\n"
+                f"{body}"
             )
         except Exception as e:
             return f"Validation error: {e}"
@@ -489,8 +522,8 @@ class SkillsMCPServer:
         # Create the session manager for streamable HTTP
         self._http_session_manager = StreamableHTTPSessionManager(
             app=self._server,
-            json_response=False,  # Use SSE streaming
-            stateless=False,  # Maintain session state
+            json_response=True,  # JSON responses work better with proxies
+            stateless=True,  # Stateless mode for compatibility with tunnels/proxies
         )
 
         # ASGI handler wrapper for the session manager
@@ -539,6 +572,22 @@ class SkillsMCPServer:
         config = uvicorn.Config(app, host=host, port=port, log_level="info")
         server = uvicorn.Server(config)
         await server.serve()
+
+    async def run_stdio(self) -> None:
+        """Run the server using stdio transport.
+
+        This is useful when the server is run as a subprocess by an MCP client.
+        Communication happens via stdin/stdout using JSON-RPC messages.
+        """
+        import mcp.server.stdio  # noqa: PLC0415
+
+        logger.info("Starting skills-mcp server with stdio transport")
+        async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
+            await self._server.run(
+                read_stream,
+                write_stream,
+                self._server.create_initialization_options(),
+            )
 
     @property
     def server(self) -> Server:

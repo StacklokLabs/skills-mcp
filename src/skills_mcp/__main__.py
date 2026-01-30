@@ -78,6 +78,13 @@ def parse_args() -> argparse.Namespace:
         help=f"Port to bind to (default: {DEFAULT_PORT})",
     )
 
+    parser.add_argument(
+        "--transport",
+        choices=["http", "stdio"],
+        default="http",
+        help="Transport to use: http (Streamable HTTP) or stdio (default: http)",
+    )
+
     return parser.parse_args()
 
 
@@ -90,7 +97,9 @@ def get_skill_paths_from_env() -> list[Path]:
     Raises:
         SystemExit: If no paths are configured.
     """
-    paths_str = os.environ.get("SKILLS_MCP_PATHS", "")
+    paths_str = os.environ.get(
+        "SKILLS_MCP_PATHS", "/Users/laurel/Documents/code/anthropic-skills/skills"
+    )
     if not paths_str:
         sys.stderr.write(
             "Error: No configuration found.\n\n"
@@ -184,9 +193,14 @@ async def run_server() -> None:
         repository = create_local_repository(paths, enable_caching=True)
 
     # Create and run server
-    logger.info("Starting skills-mcp server on %s:%d", args.host, args.port)
     server = SkillsMCPServer(repository)
-    await server.run_http(host=args.host, port=args.port)
+
+    if args.transport == "stdio":
+        logger.info("Starting skills-mcp server with stdio transport")
+        await server.run_stdio()
+    else:
+        logger.info("Starting skills-mcp server on %s:%d", args.host, args.port)
+        await server.run_http(host=args.host, port=args.port)
 
 
 def main() -> None:
