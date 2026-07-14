@@ -1,6 +1,5 @@
 # Skills MCP Server
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Serve [Agent Skills](https://agentskills.io/specification) over MCP with centralized hosting and token-efficient progressive disclosure.
 
@@ -117,7 +116,7 @@ See [docs/architecture/mcp-server-design.md](docs/architecture/mcp-server-design
 
 ## License
 
-Apache License 2.0
+Proprietary. © Stacklok, Inc. All rights reserved.
 
 ## Links
 
