@@ -10,6 +10,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Skill validation tool
 - Session-based state tracking for expanded skills
 - Local filesystem skill repository with caching
+- Git repository skill source (`git:` config section): clones skills over
+  HTTPS from `git://host/owner/repo[@ref][#subdir]` references (tag, branch, or
+  pinned commit), with case-insensitive `SKILL.md` discovery, `#subdir`
+  scoping, a commit-SHA-keyed snapshot cache, stale-serve-when-offline, and
+  HTTPS-token auth (per-host config or `GITHUB_TOKEN`/`GITLAB_TOKEN`/`GIT_TOKEN`
+  fallback). Hardened against SSRF (parse-time IP-literal rejection plus a
+  pre-clone `getaddrinfo` check, bypassable with `allow_private_hosts`).
+  Scope for this release excludes SSH, submodules (ignored with a warning), and
+  marketplace/index parsing.
 - SEP-2640 resource annotations on every listed resource: `audience`
   (`["assistant"]`), `priority` (0.8 skill-level, 0.3 sub-resources), and an
   ISO 8601 `lastModified` derived from file mtime (omitted when unknown).

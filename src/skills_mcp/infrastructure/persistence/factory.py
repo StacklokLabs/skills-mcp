@@ -102,7 +102,6 @@ def create_repository(config: RepositoryConfig) -> SkillRepository:
 
     Raises:
         ValueError: If no sources are configured.
-        NotImplementedError: If a source type is not yet implemented.
     """
     if not config.sources:
         raise ValueError("At least one source must be configured")
@@ -144,7 +143,6 @@ def _create_source_repository(source: SourceConfig) -> SkillRepository:
         A repository for the source.
 
     Raises:
-        NotImplementedError: If the source type is not yet implemented.
         ValueError: If required configuration is missing.
     """
     match source.source_type:

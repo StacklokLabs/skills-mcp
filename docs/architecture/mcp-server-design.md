@@ -155,7 +155,7 @@ SkillRepository (Protocol - Domain Layer)
     ├── LocalSkillRepository      ← Filesystem (implemented)
     ├── OCISkillRepository        ← OCI registries (implemented)
     ├── CompositeSkillRepository  ← Combines multiple sources (implemented)
-    ├── GitSkillRepository        ← Git repos (future)
+    ├── GitSkillRepository        ← Git repos over HTTPS (implemented)
     └── DatabaseSkillRepository   ← SQL/NoSQL (future)
 ```
 

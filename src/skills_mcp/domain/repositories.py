@@ -27,7 +27,7 @@ class SkillRepository(Protocol):
         - LocalSkillRepository: Reads from local filesystem
         - OCISkillRepository: Pulls from OCI registries
         - CompositeSkillRepository: Combines multiple sources
-        - GitSkillRepository: Clones/pulls from Git repositories (future)
+        - GitSkillRepository: Clones/pulls from Git repositories over HTTPS
         - DatabaseSkillRepository: Queries from SQL/NoSQL database (future)
 
     Example:

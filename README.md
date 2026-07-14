@@ -89,6 +89,19 @@ Connect any Streamable-HTTP MCP client (Claude Code, Roo Code, Cline, Continue) 
 | `SKILLS_MCP_PORT` | Server port | `8080` |
 | `SKILLS_MCP_LOG_LEVEL` | Log level (DEBUG/INFO/WARNING/ERROR) | `WARNING` |
 
+### Skill Sources
+
+A `skills.yaml` file can pull skills from three kinds of source, in any
+combination (local takes precedence over git, then oci, on name collisions):
+
+- **Local filesystem** (`local:`) — directories scanned for `SKILL.md`.
+- **Git repositories** (`git:`) — cloned over HTTPS using
+  `git://host/owner/repo[@ref][#subdir]` references (tag, branch, or pinned
+  commit); HTTPS-with-token auth only, no SSH, no submodules.
+- **OCI registries** (`oci:`) — skill artifacts pulled from a registry.
+
+See [docs/configuration.md](docs/configuration.md) for the full schema.
+
 ## Development
 
 ```bash

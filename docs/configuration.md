@@ -44,6 +44,18 @@ oci:
       username: ${GITHUB_USER}
       password: ${GITHUB_TOKEN}
 
+# Git repository skill sources
+git:
+  cache_dir: ~/.cache/skills-mcp/git
+  clone_timeout: 120        # seconds per repository
+  allow_private_hosts: false
+  skills:
+    - repo: git://github.com/stacklok/skills@v1.0.0
+    - repo: git://github.com/stacklok/skills@main#analysis
+  auth:
+    github.com:
+      password: ${GITHUB_TOKEN}
+
 # Server settings
 server:
   host: 127.0.0.1
@@ -214,6 +226,85 @@ File reference fields:
 
 **Note**: If both direct values (`username`/`password`) and file references are specified,
 file references take precedence.
+
+### Git Repositories
+
+Clones skills from Git repositories over HTTPS and discovers every directory
+containing a `SKILL.md` (matched case-insensitively):
+
+```yaml
+git:
+  cache_dir: ~/.cache/skills-mcp/git  # Where cloned snapshots are cached
+  clone_timeout: 120                  # Per-repository clone/resolve timeout (s)
+  allow_private_hosts: false          # SSRF guard (see below)
+  skills:
+    - repo: git://github.com/org/skills@v1.0.0        # pin to a tag
+    - repo: git://github.com/org/skills@main          # track a branch
+    - repo: git://github.com/org/skills@<40-hex-sha>  # pin to a commit
+    - repo: git://github.com/org/skills@main#analysis # scope to a subdir
+```
+
+#### Reference syntax
+
+References use ToolHive notation: `git://host/owner/repo[@ref][#subdir]`.
+`git://` is *notation only* — repositories are always fetched over **HTTPS**,
+never the unauthenticated git daemon protocol.
+
+| Part | Meaning |
+|------|---------|
+| `host/owner/repo` | The repository (nested owners like `group/subgroup` are allowed; a trailing `.git` is stripped) |
+| `@ref` | A branch, tag, or 40-character commit SHA. Omitted → the remote's default branch. **Tag or commit pins are recommended** for reproducibility |
+| `#subdir` | Restrict discovery to a subdirectory of the repository |
+
+The resolved commit SHA is the skill's content version. Pinned (40-hex)
+commits are immutable and re-load from cache with no network access; branch
+references re-resolve on refresh and produce a new snapshot when the tip moves.
+
+#### Authentication
+
+Git access is **HTTPS-with-token only** (no SSH). The `password` field carries
+the token and the username defaults to `x-access-token`:
+
+```yaml
+git:
+  auth:
+    github.com:
+      password: ${GITHUB_TOKEN}
+    gitlab.example.com:
+      username: ${GIT_USER}          # optional; defaults to x-access-token
+      password_file: /run/secrets/git_token   # file-based creds also supported
+```
+
+If no per-host `auth` entry matches, an environment token is used as a
+fallback: `GITHUB_TOKEN` for `github.com`, `GITLAB_TOKEN` for `gitlab.com`, and
+`GIT_TOKEN` for any host. This lets a single `GITHUB_TOKEN` work with zero
+`auth` configuration. Credentials are passed only as transport parameters —
+never embedded in a URL or written to logs.
+
+#### Cache and offline behavior
+
+Snapshots accumulate under `cache_dir` as `host/owner/repo/<sha>/`. There is no
+automatic eviction this release: pinned refs are immutable, and each new branch
+tip adds one directory. Reclaim space by removing snapshot directories manually
+(`rm -rf`). When a remote is unreachable, a previously cached snapshot for the
+same reference is served stale with a warning; otherwise that reference is
+skipped and the other sources keep working.
+
+#### Private-host protection (SSRF)
+
+Before cloning, the host is resolved and rejected if it points at a
+private/loopback/link-local/reserved address; literal private IPs are rejected
+at parse time. Set `allow_private_hosts: true` to permit internal Git hosts
+(e.g. an on-prem GitLab). This narrows, but does not fully close, a
+time-of-check/time-of-use window, so enable it only for trusted networks.
+
+#### Limitations
+
+- **HTTPS + token only** — SSH remotes are not supported.
+- **Submodules are ignored** — a `.gitmodules` file logs a warning and is not
+  recursed.
+- **No marketplace/index parsing** — `marketplace.json` / `index.json` files
+  are not interpreted; discovery is purely directory-based.
 
 ## Validation
 
