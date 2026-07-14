@@ -3,7 +3,7 @@
 # https://edu.chainguard.dev/chainguard/chainguard-images/getting-started/python/
 
 # Build stage: install dependencies with uv
-FROM ghcr.io/astral-sh/uv:0.5-python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.11-python3.13-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy

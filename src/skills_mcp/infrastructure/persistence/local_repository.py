@@ -186,7 +186,7 @@ class LocalSkillRepository:
         Args:
             base_path: The directory to scan.
         """
-        for item in base_path.iterdir():
+        for item in base_path.iterdir():  # noqa: ASYNC240  # sync local-fs by design
             if not item.is_dir():
                 continue
 
@@ -226,7 +226,7 @@ class LocalSkillRepository:
         return Skill(
             manifest=manifest,
             body=body,
-            path=skill_dir.resolve(),
+            path=skill_dir.resolve(),  # noqa: ASYNC240  # sync local-fs by design
             scripts=scripts,
             references=references,
             assets=assets,
@@ -245,11 +245,12 @@ class LocalSkillRepository:
         Returns:
             List of discovered resources.
         """
-        if not resource_dir.exists() or not resource_dir.is_dir():
+        # sync local-fs by design
+        if not resource_dir.exists() or not resource_dir.is_dir():  # noqa: ASYNC240
             return []
 
         resources = []
-        for item in resource_dir.iterdir():
+        for item in resource_dir.iterdir():  # noqa: ASYNC240  # sync local-fs by design
             if not item.is_file():
                 continue
 

@@ -237,7 +237,7 @@ def create_repository_from_skills_config(
             SourceConfig(
                 source_type=SourceType.OCI,
                 oci_skills=oci_skills,
-                oci_auth=oci_auth if oci_auth else None,
+                oci_auth=oci_auth or None,
                 oci_cache_dir=skills_config.oci.cache_dir,
             )
         )

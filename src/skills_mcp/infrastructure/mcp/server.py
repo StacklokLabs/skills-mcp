@@ -777,7 +777,8 @@ class SkillsMCPServer:
         if not self._allowed_validation_paths:
             return "Error: Skill validation is disabled (no allowed paths configured)"
 
-        skill_path = Path(path_str).resolve()
+        # sync local-fs by design
+        skill_path = Path(path_str).resolve()  # noqa: ASYNC240
 
         # Security check: ensure path is within allowed directories
         if not self._is_validation_path_allowed(skill_path):
