@@ -28,6 +28,7 @@ dependencies = [
     "uvicorn>=0.31.1",
     "anyio>=4.5",
     "oras>=0.2.25",
+    "dulwich>=1.2.10",
 ]
 
 [project.optional-dependencies]

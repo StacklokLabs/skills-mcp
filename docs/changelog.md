@@ -29,6 +29,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Raised dependency floors and pinned `mcp[cli]` to `>=1.28.1,<2` (per upstream
   guidance, as `main` is v2 dev); `pydantic>=2.11`, `uvicorn>=0.31.1`,
   `anyio>=4.5`.
+- New dependency `dulwich>=1.2.10` (pure-Python Git) backs the Git skill
+  source. It is dual-licensed **Apache-2.0 OR GPL-2.0-or-later** and is
+  consumed here under **Apache-2.0**, matching this project's license; it
+  ships `py.typed`, so no mypy `ignore_missing_imports` override is added.
+  Single-maintainer project — noted for supply-chain awareness.
 - Toolchain refresh: `ruff>=0.15` (adopts the 2026 formatter style) and
   `mypy>=2.0` (strict-clean under mypy 2.x defaults).
 - CI test matrix updated to Python 3.12–3.14 (dropped the 3.11 leg, which

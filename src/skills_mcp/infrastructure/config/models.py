@@ -284,7 +284,5 @@ class SkillsConfig(BaseModel):
     def is_empty(self) -> bool:
         """Check if no sources are configured."""
         return not (
-            self.has_local_sources()
-            or self.has_oci_sources()
-            or self.has_git_sources()
+            self.has_local_sources() or self.has_oci_sources() or self.has_git_sources()
         )
