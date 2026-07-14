@@ -230,7 +230,19 @@ file references take precedence.
 ### Git Repositories
 
 Clones skills from Git repositories over HTTPS and discovers every directory
-containing a `SKILL.md` (matched case-insensitively):
+containing a `SKILL.md` (matched case-insensitively).
+
+**Public repositories need no auth configuration.** The simplest possible git
+source points at a public repo with no `auth` block at all:
+
+```yaml
+git:
+  skills:
+    - repo: git://github.com/stacklok/skills@v1.0.0
+```
+
+That is a complete, working configuration. Add `cache_dir`, `auth`, and the
+other keys below only when you need them:
 
 ```yaml
 git:
@@ -260,10 +272,42 @@ The resolved commit SHA is the skill's content version. Pinned (40-hex)
 commits are immutable and re-load from cache with no network access; branch
 references re-resolve on refresh and produce a new snapshot when the tip moves.
 
+The optional `#subdir` scopes discovery to one subtree. Without it the whole
+repository is scanned:
+
+```yaml
+git:
+  skills:
+    - repo: git://github.com/org/skills@main            # scan the whole repo
+    - repo: git://github.com/org/skills@main#packs/data # only packs/data/**
+```
+
+#### When are repositories fetched?
+
+Git references are **parsed and validated at startup** (a malformed `git://`
+string, a disallowed IP host, or a bad ref/subdir fails configuration
+loading). The repositories themselves are **fetched lazily on the first
+request** that lists or reads a skill, not at startup.
+
+A fetch, resolve, or authentication failure is **non-fatal**: the affected
+reference is skipped (or served stale from cache — see below), other sources
+keep working, and the server does not exit. Because the failure is only
+visible in the **logs at WARNING level**, grep the server logs when a skill
+does not appear:
+
+```
+Failed to resolve git://...      # ref/host resolution or auth failed
+Failed to fetch git repo git://... # clone or discovery failed
+Serving stale ...; remote unreachable
+```
+
+Raise `server.log_level` to `INFO`/`DEBUG` for more detail (DEBUG also logs the
+credential *source* — never the secret).
+
 #### Authentication
 
 Git access is **HTTPS-with-token only** (no SSH). The `password` field carries
-the token and the username defaults to `x-access-token`:
+the token and the `username` defaults to `x-access-token`:
 
 ```yaml
 git:
@@ -275,11 +319,24 @@ git:
       password_file: /run/secrets/git_token   # file-based creds also supported
 ```
 
+The `x-access-token` default follows GitHub's convention, where the token goes
+in the password field and the username is ignored (any placeholder works).
+GitLab accepts any non-empty username alongside a personal access token, so the
+same default works there too; set `username` explicitly only if your host
+requires a specific value.
+
 If no per-host `auth` entry matches, an environment token is used as a
 fallback: `GITHUB_TOKEN` for `github.com`, `GITLAB_TOKEN` for `gitlab.com`, and
 `GIT_TOKEN` for any host. This lets a single `GITHUB_TOKEN` work with zero
 `auth` configuration. Credentials are passed only as transport parameters —
 never embedded in a URL or written to logs.
+
+!!! warning "`GIT_TOKEN` is unscoped"
+    `GIT_TOKEN` is sent to **any** git host you configure a reference for, not
+    just one. If you point at repositories on more than one host, a leaked or
+    over-broad `GIT_TOKEN` is exposed to all of them. Prefer the host-scoped
+    `GITHUB_TOKEN`/`GITLAB_TOKEN` fallbacks, or an explicit per-host `auth`
+    entry, so each token only ever reaches its intended host.
 
 #### Cache and offline behavior
 
@@ -297,6 +354,23 @@ private/loopback/link-local/reserved address; literal private IPs are rejected
 at parse time. Set `allow_private_hosts: true` to permit internal Git hosts
 (e.g. an on-prem GitLab). This narrows, but does not fully close, a
 time-of-check/time-of-use window, so enable it only for trusted networks.
+
+#### Security notes and accepted residuals
+
+The git source is designed for **operator-controlled** references — the
+`git://` strings and tokens in your configuration are trusted inputs. With that
+in mind, two residual risks are documented rather than fully mitigated in this
+release:
+
+- **DNS-rebinding / redirect TOCTOU.** The pre-clone private-host check
+  (above) resolves the hostname once; a hostile DNS server or HTTP redirect
+  could still steer the actual connection elsewhere afterwards. The check
+  raises the bar against accidental SSRF but is not a hard guarantee. Mitigate
+  by pinning to trusted hosts and keeping `allow_private_hosts: false`.
+- **Unbounded clone size.** Unlike the OCI source, there are no per-artifact
+  size caps on a git clone (dulwich exposes no clean surface for it). A hostile
+  or accidentally huge repository can fill the cache disk. Mitigate with
+  filesystem disk quotas on `cache_dir` and by pinning to trusted repositories.
 
 #### Limitations
 
@@ -316,5 +390,13 @@ The server validates configuration on startup:
   path that does not exist or is not a directory logs a warning at startup
   (the server keeps serving)
 - **OCI images**: Must be valid image references
+- **Git references**: Each `git://` reference is parsed and validated (scheme,
+  host, ref, and subdir). A malformed reference fails startup.
 
 Invalid configuration will cause the server to exit with a clear error message.
+
+Network operations are **not** part of startup validation. OCI pulls and git
+clones happen lazily on first use; an unreachable registry/host, a missing
+ref, or an auth failure is non-fatal and surfaces only in the logs at WARNING
+(see [When are repositories fetched?](#when-are-repositories-fetched) for the
+git log strings to grep). The server keeps serving the sources that do work.

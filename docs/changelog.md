@@ -17,8 +17,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   HTTPS-token auth (per-host config or `GITHUB_TOKEN`/`GITLAB_TOKEN`/`GIT_TOKEN`
   fallback). Hardened against SSRF (parse-time IP-literal rejection plus a
   pre-clone `getaddrinfo` check, bypassable with `allow_private_hosts`).
-  Scope for this release excludes SSH, submodules (ignored with a warning), and
-  marketplace/index parsing.
+  Git references are validated at startup but fetched lazily on first request;
+  fetch/auth failures are non-fatal and logged at WARNING. Scope for this
+  release excludes SSH, submodules (ignored with a warning), and
+  marketplace/index parsing; two residual risks are documented in the git
+  configuration section (DNS-rebinding/redirect TOCTOU after the pre-clone host
+  check, and unbounded clone size — mitigate with trusted-repo pinning and disk
+  quotas). `GIT_TOKEN` is an unscoped fallback sent to any configured host;
+  prefer host-scoped tokens.
 - SEP-2640 resource annotations on every listed resource: `audience`
   (`["assistant"]`), `priority` (0.8 skill-level, 0.3 sub-resources), and an
   ISO 8601 `lastModified` derived from file mtime (omitted when unknown).
