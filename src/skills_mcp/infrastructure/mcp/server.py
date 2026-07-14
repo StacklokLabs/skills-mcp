@@ -23,12 +23,13 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from mcp.server import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import (
+    Annotations,
     GetPromptResult,
     Prompt,
     PromptArgument,
@@ -50,6 +51,7 @@ from skills_mcp.infrastructure.mcp.session import SessionManager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from datetime import datetime
 
     from starlette.types import Receive, Scope, Send
 
@@ -64,6 +66,15 @@ SKILL_URI_SCHEME = "skills"
 
 # URI path structure: skills://{name}/{type}/{file} has 3 parts
 URI_RESOURCE_PARTS_COUNT = 3
+
+# SEP-2640 resource annotation priorities (0.0-1.0). Skill-level resources are
+# the primary discovery surface, so they rank higher than the on-demand
+# sub-resources revealed after expansion.
+SKILL_RESOURCE_PRIORITY = 0.8
+SUB_RESOURCE_PRIORITY = 0.3
+
+# SEP-2640 audience: these resources are meant for the assistant to consume.
+RESOURCE_AUDIENCE: list[Literal["user", "assistant"]] = ["assistant"]
 
 # Default HTTP settings
 DEFAULT_HOST = "127.0.0.1"
@@ -265,6 +276,9 @@ class SkillsMCPServer:
                     name=skill.name.value,
                     description=skill.manifest.description_short,
                     mimeType="text/markdown",
+                    annotations=self._build_annotations(
+                        SKILL_RESOURCE_PRIORITY, skill.last_modified
+                    ),
                 )
             )
 
@@ -279,6 +293,9 @@ class SkillsMCPServer:
                         name=script.name,
                         description=f"Script ({script.token_count} tokens)",
                         mimeType=self._get_mime_type(script.name),
+                        annotations=self._build_annotations(
+                            SUB_RESOURCE_PRIORITY, script.last_modified
+                        ),
                     )
                     for script in skill.scripts
                 )
@@ -289,6 +306,9 @@ class SkillsMCPServer:
                         name=reference.name,
                         description=f"Reference ({reference.token_count} tokens)",
                         mimeType=self._get_mime_type(reference.name),
+                        annotations=self._build_annotations(
+                            SUB_RESOURCE_PRIORITY, reference.last_modified
+                        ),
                     )
                     for reference in skill.references
                 )
@@ -299,11 +319,42 @@ class SkillsMCPServer:
                         name=asset.name,
                         description=f"Asset ({asset.token_count} tokens)",
                         mimeType=self._get_mime_type(asset.name),
+                        annotations=self._build_annotations(
+                            SUB_RESOURCE_PRIORITY, asset.last_modified
+                        ),
                     )
                     for asset in skill.assets
                 )
 
         return resources
+
+    @staticmethod
+    def _build_annotations(
+        priority: float, last_modified: datetime | None
+    ) -> Annotations:
+        """Build SEP-2640 resource annotations.
+
+        Declares the resource ``audience`` and ``priority`` and, when known,
+        the ``lastModified`` timestamp. ``lastModified`` is an extra field on
+        the SDK's ``Annotations`` model (``extra="allow"``) that survives wire
+        serialization; it is omitted entirely when the timestamp is unknown.
+
+        Args:
+            priority: Relative importance for discovery (0.0-1.0).
+            last_modified: Last-modified timestamp, or ``None`` to omit it.
+
+        Returns:
+            An ``Annotations`` instance for a listed resource.
+        """
+        extra: dict[str, object] = {}
+        if last_modified is not None:
+            # ISO 8601 (RFC 3339) timestamp, e.g. 2026-07-14T12:00:00+00:00.
+            extra["lastModified"] = last_modified.isoformat()
+        return Annotations(
+            audience=list(RESOURCE_AUDIENCE),
+            priority=priority,
+            **extra,
+        )
 
     async def _handle_read_resource(self, uri: str) -> list[ReadResourceContents]:
         """Handle resources/read request.

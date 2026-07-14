@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
@@ -37,6 +37,7 @@ def create_mock_skill(
     scripts: list[SkillResource] | None = None,
     references: list[SkillResource] | None = None,
     assets: list[SkillResource] | None = None,
+    last_modified: datetime | None = None,
 ) -> Skill:
     """Create a mock skill for testing."""
     return Skill(
@@ -47,6 +48,7 @@ def create_mock_skill(
         references=references or [],
         assets=assets or [],
         token_count=100,
+        last_modified=last_modified,
     )
 
 
@@ -142,6 +144,67 @@ class TestSkillsMCPServerListResources:
         resources = await server._handle_list_resources()
 
         assert resources == []
+
+
+class TestSkillsMCPServerResourceAnnotations:
+    """Tests for SEP-2640 annotations on listed resources."""
+
+    async def test_skill_resource_has_annotations(self) -> None:
+        """Skill-level resource gets priority 0.8, assistant audience, mtime."""
+        mtime = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC)
+        repo = AsyncMock()
+        repo.list_all.return_value = [create_mock_skill("skill1", last_modified=mtime)]
+
+        server = SkillsMCPServer(repo)
+        resources = await server._handle_list_resources()
+
+        assert len(resources) == 1
+        ann = resources[0].annotations
+        assert ann is not None
+        assert ann.audience == ["assistant"]
+        assert ann.priority == 0.8
+        # lastModified is an extra field carrying the ISO 8601 mtime.
+        dumped = resources[0].model_dump(by_alias=True, mode="json", exclude_none=True)
+        assert dumped["annotations"]["lastModified"] == mtime.isoformat()
+
+    async def test_skill_resource_omits_last_modified_when_none(self) -> None:
+        """When last_modified is None the serialized annotation omits the key."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [create_mock_skill("skill1", last_modified=None)]
+
+        server = SkillsMCPServer(repo)
+        resources = await server._handle_list_resources()
+
+        dumped = resources[0].model_dump(by_alias=True, mode="json", exclude_none=True)
+        assert "lastModified" not in dumped["annotations"]
+        # audience and priority are still present.
+        assert dumped["annotations"]["priority"] == 0.8
+
+    async def test_sub_resources_have_lower_priority(self) -> None:
+        """Expanded sub-resources get priority 0.3 and assistant audience."""
+        mtime = datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC)
+        script = SkillResource(
+            name="test.py",
+            path=Path("/skills/skill1/scripts/test.py"),
+            resource_type=ResourceType.SCRIPT,
+            token_count=50,
+            last_modified=mtime,
+        )
+        repo = AsyncMock()
+        repo.list_all.return_value = [create_mock_skill("skill1", scripts=[script])]
+
+        server = SkillsMCPServer(repo)
+        server._session_manager.mark_expanded("s", SkillName("skill1"))
+
+        with patch.object(server, "_get_session_id", return_value="s"):
+            resources = await server._handle_list_resources()
+
+        sub = next(r for r in resources if "scripts/test.py" in str(r.uri))
+        assert sub.annotations is not None
+        assert sub.annotations.priority == 0.3
+        assert sub.annotations.audience == ["assistant"]
+        dumped = sub.model_dump(by_alias=True, mode="json", exclude_none=True)
+        assert dumped["annotations"]["lastModified"] == mtime.isoformat()
 
 
 class TestSkillsMCPServerReadResource:
