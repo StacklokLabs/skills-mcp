@@ -7,7 +7,7 @@ Exposes skills as MCP resources with progressive disclosure (3-tier loading).
 
 ## Technology Stack
 
-- **Language**: Python 3.10+ (using 3.13)
+- **Language**: Python 3.12+ (3.12–3.14 in CI)
 - **Package Manager**: uv
 - **MCP SDK**: mcp[cli] (python-sdk)
 - **Validation**: Pydantic v2

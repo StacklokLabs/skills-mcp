@@ -47,6 +47,27 @@ Skills are exposed in three tiers, each loaded only when needed:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+## MCP Surfaces: Resources, Tools, and Prompts
+
+The tier model above is exposed through three complementary MCP surfaces. Different AI coding agents load skills in different ways, so the server offers all three rather than betting on one:
+
+- **Resources** (`skills://` URIs) - the progressive-disclosure model described above, for resource-aware clients (Roo Code, Cline).
+- **Tools** - mirror the `Skill` tool pattern used natively by Claude Code, Roo Code, Cline, and Continue, giving universal tool-calling compatibility:
+  - `list_skills` - Tier 1 catalog. The tool's own description embeds the current `<available_skills>` list (name + short description), matching Claude Code's pattern of surfacing the catalog in the description so a model knows what exists without a separate call.
+  - `get_skill` - Tier 2 activation; also marks the skill expanded for the session.
+  - `get_skill_resource` - Tier 3 resource load, addressed as `type/filename`.
+  - `validate_skill` - validates a skill directory against the spec. It is gated: unless the server is constructed with an explicit allow-list of validation paths it returns a "validation is disabled" message. The bundled entry point does not currently wire this option, so it is off by default.
+- **Prompts** - each skill is exposed as an MCP prompt (one per skill). Clients like Continue convert MCP prompts into slash commands, so users get `/skill-name` invocation. `prompts/get` returns the SKILL.md body as a user message, appending any `args` and a resource listing, mimicking how Claude Code injects skill content via prompt expansion.
+
+The server also declares MCP **instructions** that direct clients to the `list_skills` → `get_skill` → `get_skill_resource` workflow.
+
+### Surface behavior notes
+
+Two behaviors differ between the resources and tools surfaces and are intentional:
+
+- **Token-count headers apply to the resources surface only.** `resources/read` prepends a token-count header to text content (`<!-- tokens: N -->` for Markdown/plain text, `# tokens: N` for Python). The `get_skill_resource` tool returns the raw file text with no such header.
+- **`list_skills` is a Tier 1 catalog.** It returns each skill's name, description, and resource *counts* (scripts/references/assets), not the resource names. Individual resource names are revealed at Tier 2 via `get_skill`. This keeps the catalog cheap.
+
 ## Multi-Tenant Session Architecture
 
 Each MCP connection maintains isolated session state:
@@ -80,9 +101,20 @@ Each MCP connection maintains isolated session state:
 @dataclass
 class SessionState:
     session_id: str
-    expanded_skills: set[SkillName]  # Skills with visible sub-resources
+    expanded_skills: set[str]        # Skills with visible sub-resources
     created_at: datetime
+    last_accessed: datetime          # Bumped on access; drives expiry
 ```
+
+### Session Lifecycle
+
+- **Session identity**: the session ID comes from the `mcp-session-id` header, which the SDK assigns on `initialize`. Resolution **fails closed** — a request with no session ID is treated as *sessionless* rather than falling back to a shared session, so expanded-skill state cannot bleed across unrelated requests. Sessionless requests still return skill bodies and resources, but skip expansion tracking and the `resources/list_changed` notification.
+- **Expiry**: sessions expire 24 hours after their last access (`last_accessed`).
+- **Cleanup**: a periodic background task, started in the ASGI lifespan, sweeps expired sessions hourly so long-running servers do not accumulate stale state. The task is cancelled on shutdown.
+
+### Skill Name Collisions
+
+When a `CompositeSkillRepository` combines sources, the first source to register a name wins. A shadowed skill is not dropped silently: each unique collision is logged once at `WARNING` with provenance (which repository shadows which), so operators can see and resolve overlapping skill names.
 
 ## URI Scheme
 
@@ -121,10 +153,10 @@ Repository interface is defined in the domain layer, with implementations in inf
 SkillRepository (Protocol - Domain Layer)
     │
     ├── LocalSkillRepository      ← Filesystem (implemented)
+    ├── OCISkillRepository        ← OCI registries (implemented)
+    ├── CompositeSkillRepository  ← Combines multiple sources (implemented)
     ├── GitSkillRepository        ← Git repos (future)
-    ├── OCISkillRepository        ← OCI registries (future)
-    ├── DatabaseSkillRepository   ← SQL/NoSQL (future)
-    └── CompositeSkillRepository  ← Combines multiple sources
+    └── DatabaseSkillRepository   ← SQL/NoSQL (future)
 ```
 
 ### Repository Interface

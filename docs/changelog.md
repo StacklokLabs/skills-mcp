@@ -21,6 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CI test matrix updated to Python 3.12–3.14 (dropped the 3.11 leg, which
   contradicted `requires-python >=3.12`).
 - Dockerfile build stage bumped to the uv 0.11 builder image.
+- Ruff `target-version` raised to `py312` to match `requires-python >=3.12`.
 
 ### Fixed
 

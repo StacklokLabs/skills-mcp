@@ -25,10 +25,10 @@ class SkillRepository(Protocol):
 
     Implementations:
         - LocalSkillRepository: Reads from local filesystem
+        - OCISkillRepository: Pulls from OCI registries
+        - CompositeSkillRepository: Combines multiple sources
         - GitSkillRepository: Clones/pulls from Git repositories (future)
-        - OCISkillRepository: Pulls from OCI registries (future)
         - DatabaseSkillRepository: Queries from SQL/NoSQL database (future)
-        - CompositeSkillRepository: Combines multiple sources (future)
 
     Example:
         async def get_skill(repo: SkillRepository, name: str) -> Skill:

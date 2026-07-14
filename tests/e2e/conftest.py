@@ -54,7 +54,7 @@ class ServerInfo:
         return f"{self.url}/mcp"
 
 
-async def wait_for_server_ready(url: str, timeout: float = 10.0) -> None:
+async def wait_for_server_ready(url: str, timeout: float = 10.0) -> None:  # noqa: ASYNC109
     """Wait for server to accept connections.
 
     Uses exponential backoff to poll the server.
@@ -88,7 +88,7 @@ async def wait_for_server_ready(url: str, timeout: float = 10.0) -> None:
                 delay = min(delay * 2, max_delay)
 
 
-async def shutdown_server(server_info: ServerInfo, timeout: float = 5.0) -> None:
+async def shutdown_server(server_info: ServerInfo, timeout: float = 5.0) -> None:  # noqa: ASYNC109
     """Gracefully shutdown the server subprocess.
 
     Sends SIGTERM first, then SIGKILL if needed.
@@ -113,7 +113,7 @@ async def shutdown_server(server_info: ServerInfo, timeout: float = 5.0) -> None
             loop.run_in_executor(None, process.wait),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         # Force kill if graceful shutdown failed
         process.kill()
         loop = asyncio.get_event_loop()
@@ -140,7 +140,7 @@ async def e2e_server() -> AsyncIterator[ServerInfo]:
     # Server output goes to an unnamed temp file, NOT subprocess.PIPE: nothing
     # drains the pipes during the run, so a chatty server would fill the OS
     # pipe buffer and deadlock mid-log-write while the client awaits forever.
-    log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")  # noqa: SIM115
     process = subprocess.Popen(  # noqa: ASYNC220, S603
         [sys.executable, "-m", "skills_mcp", "--host", host, "--port", str(port)],
         env=env,
@@ -272,7 +272,7 @@ def e2e_server_module() -> Iterator[ServerInfo]:
     # See e2e_server: output must go to a temp file, not an undrained PIPE.
     # This matters even more here — the module-scoped server accumulates a
     # whole module's worth of log output and WILL fill the pipe buffer.
-    log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
+    log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")  # noqa: SIM115
     process = subprocess.Popen(  # noqa: S603
         [sys.executable, "-m", "skills_mcp", "--host", host, "--port", str(port)],
         env=env,

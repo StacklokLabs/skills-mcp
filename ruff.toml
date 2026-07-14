@@ -1,7 +1,7 @@
 # Ruff configuration for skills-mcp
 # https://docs.astral.sh/ruff/configuration/
 
-target-version = "py310"
+target-version = "py312"
 line-length = 88
 src = ["src", "tests"]
 
