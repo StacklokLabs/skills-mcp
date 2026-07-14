@@ -16,6 +16,12 @@ from skills_mcp.infrastructure.persistence.cache import CachingRepositoryDecorat
 from skills_mcp.infrastructure.persistence.composite_repository import (
     CompositeSkillRepository,
 )
+from skills_mcp.infrastructure.persistence.git_models import (
+    GitAuthConfig,
+    GitRepositoryConfig,
+    GitSkillReference,
+)
+from skills_mcp.infrastructure.persistence.git_repository import GitSkillRepository
 from skills_mcp.infrastructure.persistence.local_repository import LocalSkillRepository
 from skills_mcp.infrastructure.persistence.oci_models import (
     OCIAuthConfig,
@@ -37,7 +43,7 @@ class SourceType(Enum):
     """Type of skill source."""
 
     LOCAL = "local"
-    GIT = "git"  # Future
+    GIT = "git"
     OCI = "oci"  # Future
 
 
@@ -48,22 +54,26 @@ class SourceConfig:
     Attributes:
         source_type: The type of source (local, git, oci).
         paths: List of paths for local sources.
-        url: URL for git/oci sources (future).
-        branch: Branch for git sources (future).
-        tag: Tag for OCI sources (future).
         oci_skills: List of OCI skill references for OCI sources.
         oci_auth: Per-registry authentication for OCI sources.
         oci_cache_dir: Cache directory for OCI sources.
+        git_skills: List of Git skill references for Git sources.
+        git_auth: Per-host authentication for Git sources.
+        git_cache_dir: Cache directory for Git snapshots.
+        git_allow_private_hosts: Bypass the pre-clone private-host check.
+        git_clone_timeout: Per-repository clone/resolve timeout in seconds.
     """
 
     source_type: SourceType
     paths: list[Path] = field(default_factory=list)
-    url: str | None = None
-    branch: str | None = None
-    tag: str | None = None
     oci_skills: list[OCISkillReference] = field(default_factory=list)
     oci_auth: dict[str, OCIAuthConfig] | None = None
     oci_cache_dir: Path | None = None
+    git_skills: list[GitSkillReference] = field(default_factory=list)
+    git_auth: dict[str, GitAuthConfig] | None = None
+    git_cache_dir: Path | None = None
+    git_allow_private_hosts: bool = False
+    git_clone_timeout: int = 120
 
 
 @dataclass
@@ -144,10 +154,16 @@ def _create_source_repository(source: SourceConfig) -> SkillRepository:
             return LocalSkillRepository(source.paths)
 
         case SourceType.GIT:
-            raise NotImplementedError(
-                "Git source support coming in a future release. "
-                "Track progress at https://github.com/stacklok/skills-mcp/issues"
+            if not source.git_skills:
+                raise ValueError("Git source requires at least one skill reference")
+            git_config = GitRepositoryConfig(
+                skills=source.git_skills,
+                auth=source.git_auth or {},
+                cache_dir=source.git_cache_dir,
+                allow_private_hosts=source.git_allow_private_hosts,
+                clone_timeout=source.git_clone_timeout,
             )
+            return GitSkillRepository(git_config)
 
         case SourceType.OCI:
             if not source.oci_skills:
@@ -193,7 +209,7 @@ def create_repository_from_skills_config(
     """Create a skill repository from a SkillsConfig.
 
     This function creates the appropriate repositories based on the
-    configuration file settings (local and/or OCI sources).
+    configuration file settings (local, Git, and/or OCI sources).
 
     Args:
         skills_config: The parsed configuration.
@@ -217,6 +233,33 @@ def create_repository_from_skills_config(
             )
         )
 
+    # Add Git sources if configured (composite precedence: local, git, oci)
+    if skills_config.has_git_sources() and skills_config.git is not None:
+        git_skills = [
+            GitSkillReference.from_string(skill.repo)
+            for skill in skills_config.git.skills
+        ]
+
+        # Convert config auth models to persistence GitAuthConfig.
+        git_auth: dict[str, GitAuthConfig] = {}
+        for host, git_auth_model in skills_config.git.auth.items():
+            git_auth[host] = GitAuthConfig(
+                host=host,
+                username=git_auth_model.get_username(),
+                password=git_auth_model.get_password(),
+            )
+
+        sources.append(
+            SourceConfig(
+                source_type=SourceType.GIT,
+                git_skills=git_skills,
+                git_auth=git_auth or None,
+                git_cache_dir=skills_config.git.cache_dir,
+                git_allow_private_hosts=skills_config.git.allow_private_hosts,
+                git_clone_timeout=skills_config.git.clone_timeout,
+            )
+        )
+
     # Add OCI sources if configured
     if skills_config.has_oci_sources() and skills_config.oci is not None:
         oci_skills = [
@@ -226,11 +269,11 @@ def create_repository_from_skills_config(
 
         # Convert auth config models to OCIAuthConfig
         oci_auth: dict[str, OCIAuthConfig] = {}
-        for registry, auth_model in skills_config.oci.auth.items():
+        for registry, oci_auth_model in skills_config.oci.auth.items():
             oci_auth[registry] = OCIAuthConfig(
                 registry=registry,
-                username=auth_model.get_username(),
-                password=auth_model.get_password(),
+                username=oci_auth_model.get_username(),
+                password=oci_auth_model.get_password(),
             )
 
         sources.append(
@@ -245,7 +288,7 @@ def create_repository_from_skills_config(
     if not sources:
         raise ValueError(
             "No skill sources configured. "
-            "Add 'local' or 'oci' section to your configuration."
+            "Add a 'local', 'git', or 'oci' section to your configuration."
         )
 
     config = RepositoryConfig(
