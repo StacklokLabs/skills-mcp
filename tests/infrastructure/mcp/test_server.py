@@ -207,6 +207,31 @@ class TestSkillsMCPServerResourceAnnotations:
         assert dumped["annotations"]["lastModified"] == mtime.isoformat()
 
 
+class TestSkillsMCPServerCapabilities:
+    """Tests for the advertised initialization capabilities."""
+
+    async def test_declares_skills_extension_capability(self) -> None:
+        """initialize options must advertise the skills experimental capability."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        opts = server.server.create_initialization_options()
+
+        assert opts.capabilities.experimental is not None
+        assert "io.modelcontextprotocol/skills" in opts.capabilities.experimental
+        assert opts.capabilities.experimental["io.modelcontextprotocol/skills"] == {}
+
+    async def test_advertises_resources_list_changed_true(self) -> None:
+        """resources.listChanged must be True since we send the notification."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        opts = server.server.create_initialization_options()
+
+        assert opts.capabilities.resources is not None
+        assert opts.capabilities.resources.listChanged is True
+
+
 class TestSkillsMCPServerReadResource:
     """Tests for resources/read handler."""
 

@@ -25,7 +25,7 @@ import mimetypes
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from mcp.server import Server
+from mcp.server import NotificationOptions, Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.types import (
@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from datetime import datetime
 
+    from mcp.server.models import InitializationOptions
     from starlette.types import Receive, Scope, Send
 
     from skills_mcp.domain.repositories import SkillRepository
@@ -85,6 +86,43 @@ MCP_SESSION_ID_HEADER = "mcp-session-id"
 
 # Default interval between periodic session-cleanup sweeps (seconds)
 DEFAULT_SESSION_CLEANUP_INTERVAL_SECONDS: float = 3600.0
+
+# SEP-2640 experimental capability key advertised on initialize, declaring that
+# this server implements the skills extension.
+SKILLS_EXTENSION_CAPABILITY = "io.modelcontextprotocol/skills"
+
+
+class _SkillsExtensionServer(Server):
+    """Server subclass that advertises the skills extension capability.
+
+    ``StreamableHTTPSessionManager`` calls ``create_initialization_options()``
+    with no arguments, so overriding the method is the only place to inject the
+    experimental capability and correct the ``resources.listChanged``
+    advertisement. The base ``Server`` defaults ``resources_changed`` to False,
+    yet this server *does* send ``resources/list_changed`` notifications on
+    first expansion — so the advertised capability must be True to match.
+    """
+
+    def create_initialization_options(
+        self,
+        notification_options: NotificationOptions | None = None,
+        experimental_capabilities: dict[str, dict[str, Any]] | None = None,
+    ) -> InitializationOptions:
+        """Inject the skills extension capability and listChanged=True.
+
+        Args:
+            notification_options: Overrides the resources_changed=True default.
+            experimental_capabilities: Overrides the skills-extension default.
+
+        Returns:
+            Initialization options carrying the experimental capability.
+        """
+        return super().create_initialization_options(
+            notification_options=notification_options
+            or NotificationOptions(resources_changed=True),
+            experimental_capabilities=experimental_capabilities
+            or {SKILLS_EXTENSION_CAPABILITY: {}},
+        )
 
 
 class SkillsMCPServer:
@@ -131,7 +169,7 @@ class SkillsMCPServer:
         self._session_manager = session_manager or SessionManager()
         self._session_cleanup_interval = session_cleanup_interval
         self._session_cleanup_task: asyncio.Task[None] | None = None
-        self._server = Server(
+        self._server = _SkillsExtensionServer(
             "skills-mcp",
             instructions=(
                 "This server provides Agent Skills — reusable instructions, "
