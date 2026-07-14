@@ -250,6 +250,51 @@ class TestSkillsMCPServerReadResource:
             await server._handle_read_resource(f"{SKILL_URI_SCHEME}://")
 
 
+class TestSkillsMCPServerBareURIReads:
+    """Pin the SEP-2640 bare-URI read guarantee.
+
+    A resource read must NOT be gated on a prior ``resources/list`` or on the
+    skill having been expanded in the session. A client that already knows a
+    resource URI (from a static registry, a prior session, or an out-of-band
+    catalog) must be able to read it directly. These tests fail closed if a
+    future change adds a listing/expansion precondition to a read handler.
+    """
+
+    async def test_read_instructions_without_prior_listing_or_expansion(self) -> None:
+        """Skill instructions read succeeds with no prior list and no session."""
+        skill = create_mock_skill("test-skill", body="# Test\n\nInstructions here")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+
+        server = SkillsMCPServer(repo)
+        # No session context, no prior _handle_list_resources call.
+        contents = await server._handle_read_resource(
+            f"{SKILL_URI_SCHEME}://test-skill"
+        )
+
+        assert len(contents) == 1
+        assert "Instructions here" in contents[0].content
+        # list_resources was never consulted as a precondition.
+        repo.list_all.assert_not_called()
+
+    async def test_read_subresource_without_prior_listing_or_expansion(self) -> None:
+        """Sub-resource read succeeds bare, without listing or expanding first."""
+        repo = AsyncMock()
+        repo.get_resource_content.return_value = b"print('hello')"
+
+        server = SkillsMCPServer(repo)
+        # Read a sub-resource directly — never expanded, never listed.
+        contents = await server._handle_read_resource(
+            f"{SKILL_URI_SCHEME}://test-skill/scripts/analyze.py"
+        )
+
+        assert len(contents) == 1
+        assert "print('hello')" in contents[0].content
+        # The read went straight to the repository; no listing was required.
+        repo.list_all.assert_not_called()
+        repo.get_resource_content.assert_awaited_once()
+
+
 class TestSkillsMCPServerListTools:
     """Tests for tools/list handler."""
 
