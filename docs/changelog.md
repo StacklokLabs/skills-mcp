@@ -26,6 +26,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Declared `starlette>=0.50` as a direct dependency; `server.py` imports
   Starlette APIs directly but relied on it transitively via `mcp`.
+- `get_skill` and prompt expansion now handle invalid skill names gracefully:
+  the previous `except ValueError` guards were dead code because `SkillName`
+  raises `InvalidSkillNameError` (not a `ValueError`) and `TypeError` for
+  non-string input, both of which propagated uncaught to in-process callers.
 - Skill name collisions across composite repositories now surface at WARNING
   level with source provenance (which repository is shadowed by which) instead
   of being dropped silently at DEBUG; each unique collision warns once.

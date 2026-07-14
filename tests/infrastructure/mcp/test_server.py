@@ -10,10 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
-from skills_mcp.domain.exceptions import (
-    InvalidSkillNameError,
-    ResourceNotFoundError,
-)
+from skills_mcp.domain.exceptions import ResourceNotFoundError
 from skills_mcp.domain.models.resource import ResourceType, SkillResource
 from skills_mcp.domain.models.skill import Skill
 from skills_mcp.domain.models.skill_name import SkillName
@@ -1022,21 +1019,30 @@ class TestSkillsMCPServerToolGetSkill:
 
         assert result[0].text == "Error: skill name is required"
 
-    async def test_get_skill_invalid_name_currently_raises_invalid_name_error(
-        self,
-    ) -> None:
-        """DOCUMENTS A BUG (see wave findings): _tool_get_skill intends to return
-        a graceful "Error: invalid skill name:" string via its `except ValueError`
-        handler, but SkillName raises InvalidSkillNameError, which subclasses
-        SkillError(Exception) and is NOT a ValueError. The handler therefore does
-        not catch it and the exception propagates uncaught. This test pins the
-        ACTUAL current behavior so the suite stays green without touching src/.
+    async def test_get_skill_invalid_name_returns_error(self) -> None:
+        """An invalid skill name should return a graceful error string.
+
+        SkillName raises InvalidSkillNameError (a SkillError, not a
+        ValueError) and raises TypeError for non-string input; the handler
+        must catch both rather than the never-raised ValueError.
         """
         repo = AsyncMock()
         server = SkillsMCPServer(repo)
 
-        with pytest.raises(InvalidSkillNameError):
-            await server._tool_get_skill("UPPER CASE!!")
+        result = await server._tool_get_skill("UPPER CASE!!")
+
+        assert result[0].text.startswith("Error: invalid skill name:")
+        repo.find_by_name.assert_not_called()
+
+    async def test_get_skill_non_string_name_returns_error(self) -> None:
+        """A non-string name (bypassing SDK validation) should not crash."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill(123)  # type: ignore[arg-type]
+
+        assert result[0].text.startswith("Error: invalid skill name:")
+        repo.find_by_name.assert_not_called()
 
     async def test_get_skill_unknown_skill_returns_error(self) -> None:
         """Should return the exact not-found error for an unknown skill."""
@@ -1339,25 +1345,19 @@ class TestSkillsMCPServerGetPrompt:
         assert "- assets/logo.png (" in text
         assert "Use get_skill_resource to load any of these." in text
 
-    async def test_get_prompt_invalid_name_currently_raises_invalid_name_error(
-        self,
-    ) -> None:
-        """DOCUMENTS A BUG (see wave findings): _handle_get_prompt intends to
-        re-raise a plain ValueError("Invalid skill name: ...") via its
-        `except ValueError` handler, but SkillName raises InvalidSkillNameError
-        (a SkillError, NOT a ValueError), so the handler is bypassed and the
-        original InvalidSkillNameError propagates. Its message still begins with
-        "Invalid skill name", but the type is not ValueError. Pinning ACTUAL
-        behavior to keep the suite green without modifying src/.
+    async def test_get_prompt_invalid_name_raises_value_error(self) -> None:
+        """An invalid skill name should raise a plain ValueError.
 
-        Note: InvalidSkillNameError is still an Exception, so at the MCP protocol
-        boundary the SDK surfaces it as an McpError (see e2e test #58).
+        SkillName raises InvalidSkillNameError (a SkillError, not a
+        ValueError) and raises TypeError for non-string input; the handler
+        must catch both and translate to the documented ValueError.
         """
         repo = AsyncMock()
         server = SkillsMCPServer(repo)
 
-        with pytest.raises(InvalidSkillNameError, match="Invalid skill name"):
+        with pytest.raises(ValueError, match="Invalid skill name"):
             await server._handle_get_prompt("UPPER CASE!!")
+        repo.find_by_name.assert_not_called()
 
     async def test_get_prompt_unknown_skill_raises_value_error(self) -> None:
         """An unknown skill should raise a ValueError."""

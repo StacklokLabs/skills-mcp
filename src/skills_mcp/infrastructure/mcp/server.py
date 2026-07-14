@@ -41,6 +41,7 @@ from pydantic import AnyUrl
 from starlette.applications import Starlette
 from starlette.routing import Mount
 
+from skills_mcp.domain.exceptions import InvalidSkillNameError
 from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.domain.services.token_estimator import estimate_tokens
@@ -619,7 +620,7 @@ class SkillsMCPServer:
 
         try:
             skill_name = SkillName(name_str)
-        except ValueError as e:
+        except (InvalidSkillNameError, TypeError) as e:
             return [TextContent(type="text", text=f"Error: invalid skill name: {e}")]
 
         skill = await self._repository.find_by_name(skill_name)
@@ -758,7 +759,7 @@ class SkillsMCPServer:
         """
         try:
             skill_name = SkillName(name)
-        except ValueError as e:
+        except (InvalidSkillNameError, TypeError) as e:
             raise ValueError(f"Invalid skill name: {e}") from e
 
         skill = await self._repository.find_by_name(skill_name)
