@@ -7,7 +7,8 @@ import os
 import socket
 import subprocess
 import sys
-from collections.abc import AsyncIterator, Callable
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,6 +178,124 @@ def mcp_client_factory(e2e_server: ServerInfo) -> ClientFactory:
     async def create_client() -> AsyncIterator[ClientSession]:
         # Cannot combine these context managers due to tuple unpacking
         async with streamable_http_client(e2e_server.mcp_url) as (  # noqa: SIM117
+            read,
+            write,
+            _,
+        ):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                yield session
+
+    return create_client
+
+
+def wait_for_server_ready_sync(url: str, timeout: float = 10.0) -> None:
+    """Synchronously wait for the server to accept connections.
+
+    A synchronous twin of :func:`wait_for_server_ready`, used by the
+    module-scoped fixture. The module scope must NOT use an async fixture:
+    ``asyncio_default_fixture_loop_scope="function"`` binds the event loop to
+    each test function, so a module-scoped async fixture would run on a loop
+    that is torn down before the module's tests finish — a loop-scope trap.
+    Keeping the fixture synchronous side-steps that entirely.
+
+    Args:
+        url: Base server URL (without /mcp path).
+        timeout: Maximum time to wait in seconds.
+
+    Raises:
+        TimeoutError: If server doesn't respond within timeout.
+    """
+    start = time.monotonic()
+    delay = 0.1
+    max_delay = 1.0
+
+    with httpx.Client() as client:
+        while True:
+            if time.monotonic() - start > timeout:
+                raise TimeoutError(
+                    f"Server at {url} did not become ready within {timeout}s"
+                )
+            try:
+                client.get(f"{url}/mcp", timeout=1.0)
+                return
+            except (httpx.ConnectError, httpx.TimeoutException):
+                time.sleep(delay)
+                delay = min(delay * 2, max_delay)
+
+
+def shutdown_server_sync(server_info: ServerInfo, timeout: float = 5.0) -> None:
+    """Synchronously terminate the server subprocess.
+
+    Sends SIGTERM first, escalating to SIGKILL if it doesn't exit in time.
+
+    Args:
+        server_info: Server instance to shut down.
+        timeout: Maximum time to wait for graceful shutdown.
+    """
+    process = server_info.process
+    if process.poll() is not None:
+        # Already terminated
+        return
+
+    process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+
+
+@pytest.fixture(scope="module")
+def e2e_server_module() -> Iterator[ServerInfo]:
+    """Start one shared skills-mcp server for a whole test module.
+
+    Deliberately synchronous (see :func:`wait_for_server_ready_sync`). Shares a
+    single subprocess across every test in the module to amortize startup cost,
+    while each test still opens its own MCP client session (and thus its own
+    session ID) via :func:`mcp_client_factory_shared`.
+    """
+    port = find_free_port()
+    host = "127.0.0.1"
+
+    env = {
+        **os.environ,
+        "SKILLS_MCP_PATHS": str(FIXTURES_PATH),
+    }
+
+    process = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-m", "skills_mcp", "--host", host, "--port", str(port)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    server_info = ServerInfo(
+        process=process,
+        host=host,
+        port=port,
+    )
+
+    try:
+        wait_for_server_ready_sync(server_info.url, timeout=10.0)
+        yield server_info
+    finally:
+        shutdown_server_sync(server_info)
+
+
+@pytest.fixture
+def mcp_client_factory_shared(e2e_server_module: ServerInfo) -> ClientFactory:
+    """Function-scoped client factory over the module-scoped shared server.
+
+    Each call creates a fresh HTTP connection with its own MCP session ID, so
+    tests remain isolated at the session level even though they share the
+    underlying server process.
+    """
+
+    @asynccontextmanager
+    async def create_client() -> AsyncIterator[ClientSession]:
+        async with streamable_http_client(e2e_server_module.mcp_url) as (  # noqa: SIM117
             read,
             write,
             _,

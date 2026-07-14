@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -9,6 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
+from skills_mcp.domain.exceptions import (
+    InvalidSkillNameError,
+    ResourceNotFoundError,
+)
 from skills_mcp.domain.models.resource import ResourceType, SkillResource
 from skills_mcp.domain.models.skill import Skill
 from skills_mcp.domain.models.skill_name import SkillName
@@ -272,6 +277,74 @@ class TestSkillsMCPServerListTools:
 
         assert validate_tool.inputSchema is not None
         assert "path" in validate_tool.inputSchema.get("properties", {})
+
+    async def test_list_tools_returns_all_four_tools(self) -> None:
+        """Should expose exactly the four skill tools."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+
+        assert {t.name for t in tools} == {
+            "list_skills",
+            "get_skill",
+            "get_skill_resource",
+            "validate_skill",
+        }
+
+    async def test_list_tools_list_skills_description_embeds_catalog(self) -> None:
+        """list_skills description should embed the current skill catalog."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill("skill1"),
+            create_mock_skill("skill2"),
+        ]
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        list_skills = next(t for t in tools if t.name == "list_skills")
+
+        assert "Currently available skills:" in list_skills.description
+        assert "- skill1: Test description" in list_skills.description
+        assert "- skill2: Test description" in list_skills.description
+
+    async def test_list_tools_list_skills_description_empty_repo_shows_placeholder(
+        self,
+    ) -> None:
+        """Empty repository should render a placeholder catalog line."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        list_skills = next(t for t in tools if t.name == "list_skills")
+
+        assert "- (no skills currently loaded)" in list_skills.description
+
+    async def test_list_tools_get_skill_schema_requires_name(self) -> None:
+        """get_skill input schema should require exactly the name argument."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        get_skill = next(t for t in tools if t.name == "get_skill")
+
+        assert get_skill.inputSchema["required"] == ["name"]
+
+    async def test_list_tools_get_skill_resource_schema_requires_both_args(
+        self,
+    ) -> None:
+        """get_skill_resource schema should require both skill_name and path."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        get_resource = next(t for t in tools if t.name == "get_skill_resource")
+
+        assert get_resource.inputSchema["required"] == ["skill_name", "resource_path"]
 
 
 class TestSkillsMCPServerCallTool:
@@ -783,3 +856,546 @@ class TestSkillsMCPServerSessionCleanup:
         # After lifespan exit the task is cancelled/awaited and cleared.
         assert server._session_cleanup_task is None
         assert task.done()
+
+
+class TestSkillsMCPServerToolListSkills:
+    """Tests for the list_skills tool response shape."""
+
+    async def test_list_skills_returns_json_catalog_with_name_and_description(
+        self,
+    ) -> None:
+        """Should return a JSON array of name/description dicts."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill("skill1"),
+            create_mock_skill("skill2"),
+        ]
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_list_skills()
+
+        assert len(result) == 1
+        data = json.loads(result[0].text)
+        assert data == [
+            {"name": "skill1", "description": "Test description"},
+            {"name": "skill2", "description": "Test description"},
+        ]
+
+    async def test_list_skills_with_resources_includes_exact_counts(self) -> None:
+        """Should include exact per-type resource counts when present."""
+        script = SkillResource(
+            name="test.py",
+            path=Path("/skills/skill1/scripts/test.py"),
+            resource_type=ResourceType.SCRIPT,
+            token_count=50,
+        )
+        reference = SkillResource(
+            name="guide.md",
+            path=Path("/skills/skill1/references/guide.md"),
+            resource_type=ResourceType.REFERENCE,
+            token_count=200,
+        )
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill("skill1", scripts=[script], references=[reference])
+        ]
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_list_skills()
+
+        data = json.loads(result[0].text)
+        assert data[0]["resources"] == {"scripts": 1, "references": 1, "assets": 0}
+
+    async def test_list_skills_without_resources_omits_resources_key(self) -> None:
+        """Should omit the resources key entirely when a skill has no resources."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [create_mock_skill("skill1")]
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_list_skills()
+
+        data = json.loads(result[0].text)
+        assert "resources" not in data[0]
+
+    async def test_list_skills_empty_repository_returns_empty_json_array(self) -> None:
+        """Should return an empty JSON array for an empty repository."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_list_skills()
+
+        assert json.loads(result[0].text) == []
+
+
+class TestSkillsMCPServerToolGetSkill:
+    """Tests for the get_skill tool response shape and error handling."""
+
+    async def test_get_skill_returns_instructions_dict_shape(self) -> None:
+        """Should return the full Skill.to_instructions_dict shape."""
+        script = SkillResource(
+            name="test.py",
+            path=Path("/skills/test-skill/scripts/test.py"),
+            resource_type=ResourceType.SCRIPT,
+            token_count=50,
+        )
+        skill = create_mock_skill("test-skill", scripts=[script])
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill("test-skill")
+
+        data = json.loads(result[0].text)
+        assert set(data.keys()) == {
+            "name",
+            "description",
+            "body",
+            "token_count",
+            "resources",
+        }
+        assert data["body"] == "# Test\n\nBody content"
+        assert data["token_count"] == 100
+        assert data["resources"]["scripts"] == [{"name": "test.py", "tokens": 50}]
+        assert data["resources"]["references"] == []
+        assert data["resources"]["assets"] == []
+
+    async def test_get_skill_resources_keys_match_accepted_resource_path_types(
+        self,
+    ) -> None:
+        """The resources dict keys must round-trip as get_skill_resource types.
+
+        This pins the implicit cross-layer contract that the keys of the
+        get_skill ``resources`` dict are exactly the ``ResourceType`` values
+        that get_skill_resource accepts, so a model can build a valid
+        ``resource_path`` from the get_skill response alone.
+        """
+        script = SkillResource(
+            name="run.py",
+            path=Path("/skills/test-skill/scripts/run.py"),
+            resource_type=ResourceType.SCRIPT,
+            token_count=50,
+        )
+        reference = SkillResource(
+            name="guide.md",
+            path=Path("/skills/test-skill/references/guide.md"),
+            resource_type=ResourceType.REFERENCE,
+            token_count=200,
+        )
+        asset = SkillResource(
+            name="logo.png",
+            path=Path("/skills/test-skill/assets/logo.png"),
+            resource_type=ResourceType.ASSET,
+            token_count=10,
+        )
+        skill = create_mock_skill(
+            "test-skill", scripts=[script], references=[reference], assets=[asset]
+        )
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        repo.get_resource_content.return_value = b"data"
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill("test-skill")
+        data = json.loads(result[0].text)
+
+        assert set(data["resources"].keys()) == {rt.value for rt in ResourceType}
+
+        # Round-trip: build resource_path from each key and confirm the repo
+        # is called with resource_type == key.
+        for key, entries in data["resources"].items():
+            for entry in entries:
+                repo.get_resource_content.reset_mock()
+                await server._tool_get_skill_resource(
+                    "test-skill", f"{key}/{entry['name']}"
+                )
+                _, called_type, called_name = repo.get_resource_content.call_args.args
+                assert called_type == key
+                assert called_name == entry["name"]
+
+    async def test_get_skill_empty_name_returns_error(self) -> None:
+        """Should return the exact error for an empty skill name."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill("")
+
+        assert result[0].text == "Error: skill name is required"
+
+    async def test_get_skill_invalid_name_currently_raises_invalid_name_error(
+        self,
+    ) -> None:
+        """DOCUMENTS A BUG (see wave findings): _tool_get_skill intends to return
+        a graceful "Error: invalid skill name:" string via its `except ValueError`
+        handler, but SkillName raises InvalidSkillNameError, which subclasses
+        SkillError(Exception) and is NOT a ValueError. The handler therefore does
+        not catch it and the exception propagates uncaught. This test pins the
+        ACTUAL current behavior so the suite stays green without touching src/.
+        """
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        with pytest.raises(InvalidSkillNameError):
+            await server._tool_get_skill("UPPER CASE!!")
+
+    async def test_get_skill_unknown_skill_returns_error(self) -> None:
+        """Should return the exact not-found error for an unknown skill."""
+        repo = AsyncMock()
+        repo.find_by_name.return_value = None
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill("missing-skill")
+
+        assert result[0].text == "Error: skill not found: missing-skill"
+
+    async def test_get_skill_with_session_marks_expanded_and_notifies_once(
+        self,
+    ) -> None:
+        """A session-scoped get_skill should expand and notify exactly once."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        with patch.object(server, "_get_session_id", return_value="sess-1"):
+            await server._tool_get_skill("test-skill")
+
+        assert server._session_manager.is_expanded("sess-1", SkillName("test-skill"))
+        server._send_resources_list_changed.assert_called_once()
+
+    async def test_get_skill_second_call_same_session_sends_no_second_notification(
+        self,
+    ) -> None:
+        """A repeat get_skill in the same session must not notify again."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        with patch.object(server, "_get_session_id", return_value="sess-1"):
+            await server._tool_get_skill("test-skill")
+            await server._tool_get_skill("test-skill")
+
+        server._send_resources_list_changed.assert_called_once()
+
+    async def test_call_tool_get_skill_missing_args_returns_required_error(
+        self,
+    ) -> None:
+        """call_tool('get_skill', {}) should surface the required-name error."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._handle_call_tool("get_skill", {})
+
+        assert result[0].text == "Error: skill name is required"
+
+
+class TestSkillsMCPServerToolGetSkillResource:
+    """Tests for the get_skill_resource tool response shape and errors."""
+
+    async def test_get_skill_resource_returns_raw_text_without_token_header(
+        self,
+    ) -> None:
+        """Should return raw resource text with no token header prepended."""
+        repo = AsyncMock()
+        repo.get_resource_content.return_value = b"print('hi')\n"
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("test-skill", "scripts/run.py")
+
+        assert result[0].text == "print('hi')\n"
+
+    async def test_get_skill_resource_missing_skill_name_returns_error(self) -> None:
+        """Should return the exact error for a missing skill name."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("", "scripts/run.py")
+
+        assert result[0].text == "Error: skill_name is required"
+
+    async def test_get_skill_resource_missing_path_returns_error(self) -> None:
+        """Should return the exact error for a missing resource path."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("test-skill", "")
+
+        assert result[0].text == "Error: resource_path is required"
+
+    async def test_get_skill_resource_traversal_returns_error(self) -> None:
+        """Path traversal should be rejected before touching the repository."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource(
+            "test-skill", "scripts/../../etc/passwd"
+        )
+
+        assert result[0].text == "Error: path traversal not allowed"
+        repo.get_resource_content.assert_not_called()
+
+    async def test_get_skill_resource_pathless_format_returns_error(self) -> None:
+        """A resource path without a type prefix should be rejected."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("test-skill", "analyze.py")
+
+        assert "must be in format 'type/filename'" in result[0].text
+
+    async def test_get_skill_resource_strips_slashes_and_splits_type_name(
+        self,
+    ) -> None:
+        """Leading slashes are stripped and only the first slash splits type."""
+        repo = AsyncMock()
+        repo.get_resource_content.return_value = b"x"
+        server = SkillsMCPServer(repo)
+
+        await server._tool_get_skill_resource("test-skill", "/scripts/run.py")
+        _, rtype, rname = repo.get_resource_content.call_args.args
+        assert (rtype, rname) == ("scripts", "run.py")
+
+        repo.get_resource_content.reset_mock()
+        await server._tool_get_skill_resource("test-skill", "scripts/sub/run.py")
+        _, rtype, rname = repo.get_resource_content.call_args.args
+        assert (rtype, rname) == ("scripts", "sub/run.py")
+
+    async def test_get_skill_resource_binary_content_returns_error(self) -> None:
+        """Undecodable (binary) content should return the exact binary error."""
+        repo = AsyncMock()
+        repo.get_resource_content.return_value = b"\x89PNG\r\n\x1a\n"
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("test-skill", "assets/logo.png")
+
+        assert (
+            result[0].text == "Error: resource is binary and cannot be returned as text"
+        )
+
+    async def test_get_skill_resource_repo_value_error_maps_to_error_prefix(
+        self,
+    ) -> None:
+        """A ValueError from the repo maps to the 'Error: ' prefix."""
+        repo = AsyncMock()
+        repo.get_resource_content.side_effect = ValueError("bad input")
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("test-skill", "scripts/run.py")
+
+        assert result[0].text == "Error: bad input"
+
+    async def test_get_skill_resource_not_found_returns_error(self) -> None:
+        """ResourceNotFoundError (a SkillError, not ValueError) hits the generic
+        handler and is prefixed with 'Error loading resource:'."""
+        repo = AsyncMock()
+        repo.get_resource_content.side_effect = ResourceNotFoundError(
+            "test-skill", "scripts", "run.py"
+        )
+        server = SkillsMCPServer(repo)
+
+        result = await server._tool_get_skill_resource("test-skill", "scripts/run.py")
+
+        assert result[0].text.startswith("Error loading resource: Resource not found:")
+
+
+class TestSkillsMCPServerListPrompts:
+    """Tests for the prompts/list handler."""
+
+    async def test_list_prompts_returns_one_prompt_per_skill(self) -> None:
+        """Should return one prompt per skill with the short description."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill("skill1"),
+            create_mock_skill("skill2"),
+        ]
+        server = SkillsMCPServer(repo)
+
+        prompts = await server._handle_list_prompts()
+
+        assert len(prompts) == 2
+        assert {p.name for p in prompts} == {"skill1", "skill2"}
+        for prompt in prompts:
+            assert prompt.description == "Test description"
+
+    async def test_list_prompts_prompt_declares_optional_args_argument(self) -> None:
+        """Each prompt should declare a single optional 'args' argument."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [create_mock_skill("skill1")]
+        server = SkillsMCPServer(repo)
+
+        prompts = await server._handle_list_prompts()
+
+        assert prompts[0].arguments is not None
+        assert len(prompts[0].arguments) == 1
+        assert prompts[0].arguments[0].name == "args"
+        assert prompts[0].arguments[0].required is False
+
+    async def test_list_prompts_empty_repository_returns_empty_list(self) -> None:
+        """Should return an empty list for an empty repository."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        assert await server._handle_list_prompts() == []
+
+
+class TestSkillsMCPServerGetPrompt:
+    """Tests for the prompts/get handler."""
+
+    async def test_get_prompt_returns_body_as_user_message(self) -> None:
+        """A resourceless skill returns exactly its body as a user message."""
+        # Use a description longer than the 50-char short form so we can assert
+        # the result carries the FULL description, not the short one.
+        full_description = (
+            "A valid test skill with a description longer than fifty characters"
+        )
+        manifest = create_mock_manifest("test-skill", description=full_description)
+        skill = Skill(
+            manifest=manifest,
+            body="# Test\n\nBody content",
+            path=Path("/skills/test-skill"),
+            token_count=100,
+        )
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+
+        result = await server._handle_get_prompt("test-skill")
+
+        assert len(result.messages) == 1
+        assert result.messages[0].role == "user"
+        text = result.messages[0].content.text  # type: ignore[union-attr]
+        assert text == "# Test\n\nBody content"
+        assert "ARGUMENTS" not in text
+        assert "Available resources" not in text
+        # Full description, not the truncated short form.
+        assert result.description == full_description
+        assert result.description != manifest.description_short
+
+    async def test_get_prompt_with_args_appends_arguments_line(self) -> None:
+        """Non-empty args should be appended as an ARGUMENTS line."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+
+        result = await server._handle_get_prompt(
+            "test-skill", {"args": "focus on auth"}
+        )
+
+        text = result.messages[0].content.text  # type: ignore[union-attr]
+        assert text.endswith("\n\nARGUMENTS: focus on auth")
+
+    async def test_get_prompt_empty_args_value_omits_arguments_line(self) -> None:
+        """An empty args value must not add an ARGUMENTS line."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+
+        result = await server._handle_get_prompt("test-skill", {"args": ""})
+
+        text = result.messages[0].content.text  # type: ignore[union-attr]
+        assert "ARGUMENTS:" not in text
+
+    async def test_get_prompt_with_resources_appends_typed_resource_listing(
+        self,
+    ) -> None:
+        """Skills with resources append a typed, human-readable listing."""
+        script = SkillResource(
+            name="test.py",
+            path=Path("/skills/test-skill/scripts/test.py"),
+            resource_type=ResourceType.SCRIPT,
+            token_count=50,
+        )
+        reference = SkillResource(
+            name="guide.md",
+            path=Path("/skills/test-skill/references/guide.md"),
+            resource_type=ResourceType.REFERENCE,
+            token_count=200,
+        )
+        asset = SkillResource(
+            name="logo.png",
+            path=Path("/skills/test-skill/assets/logo.png"),
+            resource_type=ResourceType.ASSET,
+            token_count=5,
+        )
+        skill = create_mock_skill(
+            "test-skill", scripts=[script], references=[reference], assets=[asset]
+        )
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+
+        result = await server._handle_get_prompt("test-skill")
+
+        text = result.messages[0].content.text  # type: ignore[union-attr]
+        assert "Available resources for this skill:" in text
+        assert "- scripts/test.py (50 tokens)" in text
+        assert "- references/guide.md (200 tokens)" in text
+        assert "- assets/logo.png (" in text
+        assert "Use get_skill_resource to load any of these." in text
+
+    async def test_get_prompt_invalid_name_currently_raises_invalid_name_error(
+        self,
+    ) -> None:
+        """DOCUMENTS A BUG (see wave findings): _handle_get_prompt intends to
+        re-raise a plain ValueError("Invalid skill name: ...") via its
+        `except ValueError` handler, but SkillName raises InvalidSkillNameError
+        (a SkillError, NOT a ValueError), so the handler is bypassed and the
+        original InvalidSkillNameError propagates. Its message still begins with
+        "Invalid skill name", but the type is not ValueError. Pinning ACTUAL
+        behavior to keep the suite green without modifying src/.
+
+        Note: InvalidSkillNameError is still an Exception, so at the MCP protocol
+        boundary the SDK surfaces it as an McpError (see e2e test #58).
+        """
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        with pytest.raises(InvalidSkillNameError, match="Invalid skill name"):
+            await server._handle_get_prompt("UPPER CASE!!")
+
+    async def test_get_prompt_unknown_skill_raises_value_error(self) -> None:
+        """An unknown skill should raise a ValueError."""
+        repo = AsyncMock()
+        repo.find_by_name.return_value = None
+        server = SkillsMCPServer(repo)
+
+        with pytest.raises(ValueError, match="Skill not found"):
+            await server._handle_get_prompt("missing-skill")
+
+    async def test_get_prompt_with_session_marks_expanded_and_notifies_once(
+        self,
+    ) -> None:
+        """A session-scoped get_prompt should expand and notify exactly once."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        with patch.object(server, "_get_session_id", return_value="sess-1"):
+            await server._handle_get_prompt("test-skill")
+
+        assert server._session_manager.is_expanded("sess-1", SkillName("test-skill"))
+        server._send_resources_list_changed.assert_called_once()
+
+    async def test_get_prompt_second_call_same_session_sends_no_second_notification(
+        self,
+    ) -> None:
+        """A repeat get_prompt in the same session must not notify again."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        with patch.object(server, "_get_session_id", return_value="sess-1"):
+            await server._handle_get_prompt("test-skill")
+            await server._handle_get_prompt("test-skill")
+
+        server._send_resources_list_changed.assert_called_once()
