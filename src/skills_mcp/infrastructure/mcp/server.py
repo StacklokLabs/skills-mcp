@@ -918,9 +918,13 @@ class SkillsMCPServer:
         # sync local-fs by design
         skill_path = Path(path_str).resolve()  # noqa: ASYNC240
 
-        # Security check: ensure path is within allowed directories
+        # Security check: ensure path is within allowed directories. Name the
+        # allowed roots so a caller can self-correct; the roots are
+        # operator-configured (and already disclosed at startup), so this is
+        # not new information leakage.
         if not self._is_validation_path_allowed(skill_path):
-            return "Error: Path is outside allowed validation directories"
+            roots = ", ".join(str(p) for p in self._allowed_validation_paths)
+            return f"Error: Path is outside allowed validation directories: {roots}"
 
         # Validate path exists and is a directory with SKILL.md
         error = self._check_skill_path(skill_path, path_str)

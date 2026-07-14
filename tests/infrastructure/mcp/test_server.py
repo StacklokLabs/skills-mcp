@@ -14,6 +14,7 @@ from skills_mcp.domain.exceptions import ResourceNotFoundError
 from skills_mcp.domain.models.resource import ResourceType, SkillResource
 from skills_mcp.domain.models.skill import Skill
 from skills_mcp.domain.models.skill_name import SkillName
+from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.infrastructure.mcp.server import (
     SKILL_URI_SCHEME,
     SkillsMCPServer,
@@ -570,7 +571,7 @@ Instructions here.
         assert "validation is disabled" in result[0].text
 
     async def test_validate_skill_rejects_outside_path(self, tmp_path: Path) -> None:
-        """Should reject paths outside allowed directories."""
+        """Should reject paths outside allowed directories, naming the roots."""
         repo = AsyncMock()
         server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
 
@@ -580,6 +581,64 @@ Instructions here.
 
         assert len(result) == 1
         assert "outside allowed" in result[0].text
+        # The message names the configured root so a caller can self-correct.
+        assert str(tmp_path.resolve()) in result[0].text  # noqa: ASYNC240
+
+    async def test_validate_skill_outside_path_does_no_filesystem_read(
+        self, tmp_path: Path
+    ) -> None:
+        """An out-of-allow-list path is refused before any manifest read."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo, allowed_validation_paths=[tmp_path])
+
+        with patch.object(ManifestParser, "parse_file") as mock_parse:
+            result = await server._handle_call_tool(
+                "validate_skill", {"path": "/etc/passwd"}
+            )
+
+        assert "outside allowed" in result[0].text
+        mock_parse.assert_not_called()
+
+    async def test_validate_skill_allows_relative_allowlist_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A relative allow-list path resolves against CWD and still allows."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: test-skill\ndescription: A test skill\n---\n\n# Test\n"
+        )
+
+        # Run with tmp_path as CWD and a RELATIVE allow-list entry.
+        monkeypatch.chdir(tmp_path)
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo, allowed_validation_paths=[Path()])
+
+        result = await server._handle_call_tool(
+            "validate_skill", {"path": "test-skill"}
+        )
+
+        assert "Valid skill" in result[0].text
+
+    async def test_validate_skill_allows_trailing_slash_allowlist_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A trailing-slash allow-list path is normalized and still allows."""
+        skill_dir = tmp_path / "test-skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: test-skill\ndescription: A test skill\n---\n\n# Test\n"
+        )
+
+        repo = AsyncMock()
+        # Trailing slash on the allow-list root.
+        server = SkillsMCPServer(repo, allowed_validation_paths=[Path(f"{tmp_path}/")])
+
+        result = await server._handle_call_tool(
+            "validate_skill", {"path": str(skill_dir)}
+        )
+
+        assert "Valid skill" in result[0].text
 
 
 class TestSkillsMCPServerMimeTypes:

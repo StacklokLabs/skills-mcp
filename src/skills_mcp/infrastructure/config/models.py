@@ -141,8 +141,18 @@ class ServerConfig(BaseModel):
 
     @field_validator("validation_paths", mode="before")
     @classmethod
-    def expand_validation_paths(cls, v: list[str | Path]) -> list[Path]:
-        """Expand ~ in validation paths."""
+    def expand_validation_paths(cls, v: list[str | Path] | str | None) -> list[Path]:
+        """Expand ~ in validation paths.
+
+        Accepts a bare string as a single path (YAML ``validation_paths: ./x``)
+        so it is not iterated character by character, and treats an explicit
+        ``None`` as "no paths". Mirrors the defensive scalar handling in
+        ``OCISourceConfig.expand_cache_dir``.
+        """
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
         return [Path(p).expanduser() for p in v]
 
 

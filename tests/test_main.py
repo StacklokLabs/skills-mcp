@@ -326,3 +326,32 @@ class TestRunServerValidationPaths:
 
         _, kwargs = server_cls.call_args
         assert kwargs["allowed_validation_paths"] is None
+
+    async def test_warns_when_validation_path_missing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A nonexistent validation path warns but does not crash startup."""
+        args = self._args([Path("/definitely/does/not/exist")])
+        config = self._config([])
+
+        with caplog.at_level(logging.WARNING, logger="skills_mcp.__main__"):
+            await self._run(args, config)
+
+        assert any(
+            "Validation path does not exist or is not a directory" in r.message
+            for r in caplog.records
+        )
+
+    async def test_enabled_disclosure_logged_at_warning(
+        self, caplog: pytest.LogCaptureFixture, tmp_path: Path
+    ) -> None:
+        """The validate_skill enable disclosure is visible at WARNING level."""
+        args = self._args([tmp_path])
+        config = self._config([])
+
+        with caplog.at_level(logging.WARNING, logger="skills_mcp.__main__"):
+            await self._run(args, config)
+
+        enabled = [r for r in caplog.records if "validate_skill enabled" in r.message]
+        assert enabled
+        assert enabled[0].levelno == logging.WARNING

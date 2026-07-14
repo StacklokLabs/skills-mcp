@@ -32,6 +32,16 @@ class TestServerConfigValidationPaths:
         config = ServerConfig(validation_paths=["~/skills"])
         assert config.validation_paths[0] == Path.home() / "skills"
 
+    def test_bare_string_treated_as_single_path(self) -> None:
+        """A bare string (YAML scalar) is one path, not iterated per-character."""
+        config = ServerConfig(validation_paths="./skills")  # type: ignore[arg-type]
+        assert config.validation_paths == [Path("./skills")]
+
+    def test_none_treated_as_empty(self) -> None:
+        """An explicit None yields an empty list (validation disabled)."""
+        config = ServerConfig(validation_paths=None)  # type: ignore[arg-type]
+        assert config.validation_paths == []
+
 
 class TestLocalSourceConfig:
     """Tests for LocalSourceConfig."""

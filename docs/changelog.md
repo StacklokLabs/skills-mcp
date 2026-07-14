@@ -56,6 +56,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `resources.listChanged` is now advertised as `true` to match actual
   behavior; the server emits `resources/list_changed` notifications on first
   expansion but previously advertised the capability as `false`.
+- A bare-string `validation_paths` in the config file (e.g.
+  `validation_paths: ./skills`) is now treated as a single path instead of
+  being iterated character by character into nonsense paths.
 
 ## [0.1.0] - TBD
 

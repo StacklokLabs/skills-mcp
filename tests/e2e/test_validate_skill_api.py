@@ -107,3 +107,5 @@ class TestValidateSkillE2E:
 
                 text = _text(result)
                 assert "outside allowed validation directories" in text
+                # The message names the configured allow-list root.
+                assert str(FIXTURES_PATH.resolve()) in text

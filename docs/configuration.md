@@ -136,6 +136,14 @@ A path passed to `validate_skill` that resolves outside every allow-listed
 directory is refused. With no paths configured, the tool reports that
 validation is disabled.
 
+!!! warning "Scope the allow-list narrowly"
+    `validate_skill` intentionally reports whether a path exists and whether it
+    has a valid skill structure *within* the allow-listed roots, to any
+    connected client. Point `validation_paths` at the directories that hold
+    your skills — not at a broad or shared location such as `/`, `$HOME`, or a
+    multi-tenant data directory — so this probing cannot be used to
+    fingerprint unrelated files.
+
 ## Skill Sources
 
 ### Local Filesystem
@@ -213,7 +221,9 @@ The server validates configuration on startup:
 
 - **Port**: Must be an integer between 1 and 65535
 - **Log level**: Must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL
-- **Paths**: Must be valid directories (warning if not found)
+- **Paths**: Skill source and `validation_paths` directories are checked; a
+  path that does not exist or is not a directory logs a warning at startup
+  (the server keeps serving)
 - **OCI images**: Must be valid image references
 
 Invalid configuration will cause the server to exit with a clear error message.

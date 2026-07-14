@@ -209,7 +209,15 @@ async def run_server() -> None:
     # Create and run server
     logger.info("Starting skills-mcp server on %s:%d", host, port)
     if validation_paths:
-        logger.info("validate_skill enabled for paths: %s", validation_paths)
+        # Enabling a filesystem-probing capability is a posture change the
+        # operator should see even at the default WARNING log level.
+        logger.warning("validate_skill enabled for paths: %s", validation_paths)
+        for path in validation_paths:
+            if not path.is_dir():
+                logger.warning(
+                    "Validation path does not exist or is not a directory: %s",
+                    path,
+                )
     server = SkillsMCPServer(
         repository,
         allowed_validation_paths=validation_paths or None,
