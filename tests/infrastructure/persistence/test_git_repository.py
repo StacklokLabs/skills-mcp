@@ -201,7 +201,10 @@ class TestPruning:
                 "skills/real/SKILL.md": _skill_md("real"),
                 "template/SKILL.md": _skill_md("tmpl"),
                 "TEMPLATE/SKILL.md": _skill_md("tmpl-upper"),
+                "Template/SKILL.md": _skill_md("tmpl-mixed"),
                 "README/SKILL.md": _skill_md("readme"),
+                "readme/SKILL.md": _skill_md("readme-lower"),
+                "ReadMe/SKILL.md": _skill_md("readme-mixed"),
                 ".hidden/SKILL.md": _skill_md("hidden"),
                 # A .gemini mirror of the real skill must be pruned (dot dir),
                 # so it never even competes for the name.

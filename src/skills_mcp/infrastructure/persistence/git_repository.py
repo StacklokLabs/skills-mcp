@@ -17,11 +17,15 @@ Security posture:
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import fcntl
 import ipaddress
 import logging
+import os
 import shutil
 import socket
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -34,8 +38,7 @@ from skills_mcp.domain.exceptions import (
     ResourceNotFoundError,
     SkillNotFoundError,
 )
-from skills_mcp.domain.models.resource import ResourceType, SkillResource
-from skills_mcp.domain.models.skill import Skill
+from skills_mcp.domain.models.resource import ResourceType
 from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.domain.services.token_estimator import TokenEstimator
@@ -44,13 +47,20 @@ from skills_mcp.infrastructure.persistence.git_models import (
     GitSkillReference,
     resolve_git_credentials,
 )
-from skills_mcp.infrastructure.persistence.mtime import file_mtime_utc
+from skills_mcp.infrastructure.persistence.skill_loader import (
+    MAX_RESOURCE_SIZE_BYTES,
+    SkillLoader,
+    is_path_safe,
+)
 
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from dulwich.repo import Repo
 
     from skills_mcp.domain.models.manifest import SkillManifest
+    from skills_mcp.domain.models.skill import Skill
 
 
 logger = logging.getLogger(__name__)
@@ -62,11 +72,19 @@ CACHE_COMPLETE_MARKER = ".skills-mcp-complete"
 # Manifest filename, matched case-insensitively during discovery.
 SKILL_MANIFEST_FILENAME = "SKILL.md"
 
-# Directory names pruned from the discovery walk (besides dot-prefixed dirs).
-PRUNED_DIR_NAMES = frozenset({"template", "TEMPLATE", "README"})
+# Directory names pruned from the discovery walk (besides dot-prefixed dirs),
+# compared case-insensitively.
+PRUNED_DIR_NAMES = frozenset({"template", "readme"})
 
-# Maximum resource size (10 MB) to prevent memory exhaustion.
-MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024
+# Prefix for in-progress clone temp dirs (created under the repo cache subtree
+# so an atomic rename stays on one filesystem and orphans are recognizable).
+CLONE_TMP_PREFIX = ".tmp-clone-"
+
+# Per-repository cross-process lock filename.
+REPO_LOCK_FILENAME = ".skills-mcp.lock"
+
+# Orphaned clone temp dirs older than this (seconds) are swept before cloning.
+ORPHAN_TMP_MAX_AGE_S = 3600
 
 # Default HTTPS port used for the pre-clone DNS/SSRF check.
 _DEFAULT_HTTPS_PORT = 443
@@ -111,6 +129,7 @@ class GitSkillRepository:
         self._config = config
         self._parser = parser or ManifestParser()
         self._token_estimator = token_estimator or TokenEstimator()
+        self._loader = SkillLoader(self._parser, self._token_estimator)
         self._skills_cache: dict[str, Skill] | None = None
         self._cache_lock = asyncio.Lock()
         self._cache_dir = config.cache_dir or GitRepositoryConfig.default_cache_dir()
@@ -175,7 +194,7 @@ class GitSkillRepository:
 
         # Validate path is within skill directory (path traversal protection).
         resolved_path = resource.path.resolve()
-        if not self._is_path_safe(resolved_path, skill.path):
+        if not is_path_safe(resolved_path, skill.path):
             raise ResourceNotFoundError(skill_name.value, resource_type, resource_name)
 
         try:
@@ -250,7 +269,7 @@ class GitSkillRepository:
         walk_root = sha_dir
         if ref.subdir is not None:
             candidate = (sha_dir / ref.subdir).resolve()
-            if not self._is_path_safe(candidate, sha_dir):
+            if not is_path_safe(candidate, sha_dir):
                 logger.warning(
                     "Subdir %r escapes repository root for %s; skipping",
                     ref.subdir,
@@ -482,10 +501,14 @@ class GitSkillRepository:
     ) -> bool:
         """Clone a reference into the cache, atomically on success.
 
-        Runs in an executor thread. Clones into a temporary directory, strips
-        ``.git``, writes the completion marker, then atomically renames into
-        the SHA directory so a failed or timed-out clone never poisons the
-        cache.
+        Runs in an executor thread. Clones into a temporary directory under the
+        repository's own cache subtree, strips ``.git``, writes the completion
+        marker, then atomically renames into the SHA directory under a
+        per-repository cross-process lock. Completion is idempotent: if the SHA
+        directory is already complete (a concurrent process, or a late-arriving
+        thread whose ``asyncio.wait_for`` already timed out), the temp dir is
+        discarded — content is identical per SHA, so this is a safe no-op. This
+        means a failed, timed-out, or racing clone never poisons the cache.
 
         Args:
             ref: The reference being cloned.
@@ -498,8 +521,10 @@ class GitSkillRepository:
         Returns:
             ``True`` on success, ``False`` on failure.
         """
-        self._repo_cache_root(ref).mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(dir=self._cache_dir))
+        repo_root = self._repo_cache_root(ref)
+        repo_root.mkdir(parents=True, exist_ok=True)
+        self._sweep_orphan_tempdirs(repo_root)
+        tmp = Path(tempfile.mkdtemp(dir=repo_root, prefix=CLONE_TMP_PREFIX))
         pinned = ref.pinned_sha is not None
         # Pinned commits need a full clone (no want-by-SHA porcelain surface),
         # then an explicit checkout. Branches/tags use a shallow clone.
@@ -517,9 +542,20 @@ class GitSkillRepository:
             (tmp / CACHE_COMPLETE_MARKER).write_text(
                 f"{resolved_sha}\n{resolved_ref}\n", encoding="utf-8"
             )
-            if sha_dir.exists():
-                shutil.rmtree(sha_dir, ignore_errors=True)
-            tmp.replace(sha_dir)
+            with self._repo_lock(repo_root):
+                if self._is_complete(sha_dir):
+                    # Already materialized by a concurrent process/thread;
+                    # the content is identical per SHA, so discard our copy.
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    logger.debug(
+                        "Snapshot already present for %s -> %s; discarding clone",
+                        ref.full_ref,
+                        resolved_sha[:12],
+                    )
+                    return True
+                if sha_dir.exists():
+                    shutil.rmtree(sha_dir, ignore_errors=True)
+                tmp.replace(sha_dir)
         except Exception:  # failure is logged; the temp dir is cleaned up
             logger.exception("Git clone failed for %s", ref.full_ref)
             shutil.rmtree(tmp, ignore_errors=True)
@@ -527,6 +563,71 @@ class GitSkillRepository:
         else:
             logger.info("Cloned %s -> %s", ref.full_ref, resolved_sha[:12])
             return True
+
+    @contextlib.contextmanager
+    def _repo_lock(self, repo_root: Path) -> Iterator[None]:
+        """Hold a per-repository cross-process lock (bounded blocking wait).
+
+        Serializes the rmtree/replace critical section across processes that
+        share the same cache directory. Within a single process, separate
+        file descriptors still conflict, so this also serializes executor
+        threads racing on the same repository.
+
+        Args:
+            repo_root: The per-repository cache root.
+
+        Yields:
+            None, while the exclusive lock is held.
+
+        Raises:
+            TimeoutError: If the lock cannot be acquired within the bound.
+        """
+        lock_path = repo_root / REPO_LOCK_FILENAME
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            deadline = time.monotonic() + self._config.clone_timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"could not acquire cache lock for {repo_root}"
+                        ) from exc
+                    time.sleep(0.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _sweep_orphan_tempdirs(repo_root: Path) -> None:
+        """Remove leftover clone temp dirs older than the orphan threshold.
+
+        A clone thread orphaned by an ``asyncio.wait_for`` timeout may leave a
+        temp dir behind. These are swept opportunistically before each clone so
+        they cannot accumulate unbounded.
+
+        Args:
+            repo_root: The per-repository cache root to sweep.
+        """
+        cutoff = time.time() - ORPHAN_TMP_MAX_AGE_S
+        try:
+            entries = list(repo_root.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if not entry.name.startswith(CLONE_TMP_PREFIX):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    shutil.rmtree(entry, ignore_errors=True)
+                    logger.debug("Swept orphaned clone temp dir: %s", entry)
+            except OSError:
+                continue
 
     @staticmethod
     def _run_clone(
@@ -641,7 +742,9 @@ class GitSkillRepository:
             if manifest_name is None:
                 continue
 
-            skill = await self._load_skill_from_dir(dirpath, dirpath / manifest_name)
+            skill = self._loader.load_skill(
+                dirpath, dirpath / manifest_name, self._read_manifest
+            )
             if skill is None:
                 continue
             name = skill.name.value
@@ -670,57 +773,25 @@ class GitSkillRepository:
 
     @staticmethod
     def _should_prune_dir(name: str) -> bool:
-        """Return True for directory names excluded from discovery."""
-        return name.startswith(".") or name in PRUNED_DIR_NAMES
+        """Return True for directory names excluded from discovery.
 
-    async def _load_skill_from_dir(
-        self, skill_dir: Path, manifest_path: Path
-    ) -> Skill | None:
-        """Load a single skill from a discovered directory.
-
-        Args:
-            skill_dir: The directory containing the manifest.
-            manifest_path: Path to the SKILL.md file (any casing).
-
-        Returns:
-            The loaded Skill, or None if it could not be parsed.
+        Dot-prefixed directories and (case-insensitively) ``template``/
+        ``readme`` are pruned, consistent with case-insensitive SKILL.md
+        matching.
         """
-        parsed = self._read_manifest(manifest_path, skill_dir.name)
-        if parsed is None:
-            return None
-        manifest, body = parsed
-
-        if manifest.name.value != skill_dir.name:
-            logger.warning(
-                "Skill name %r differs from directory %r; frontmatter wins",
-                manifest.name.value,
-                skill_dir.name,
-            )
-
-        token_count = self._token_estimator.estimate(body)
-        scripts = await self._discover_resources(skill_dir / "scripts", skill_dir)
-        references = await self._discover_resources(skill_dir / "references", skill_dir)
-        assets = await self._discover_resources(skill_dir / "assets", skill_dir)
-
-        return Skill(
-            manifest=manifest,
-            body=body,
-            path=skill_dir.resolve(),  # noqa: ASYNC240  # sync local-fs by design
-            scripts=scripts,
-            references=references,
-            assets=assets,
-            token_count=token_count,
-            last_modified=file_mtime_utc(manifest_path),
-        )
+        return name.startswith(".") or name.lower() in PRUNED_DIR_NAMES
 
     def _read_manifest(
         self, manifest_path: Path, dir_name: str
     ) -> tuple[SkillManifest, str] | None:
         """Parse a manifest, falling back to the directory name if unnamed.
 
-        The frontmatter ``name`` is authoritative. When it is missing and the
-        directory name is a valid skill name, the directory name is used and a
-        warning is logged; any other parse failure skips the skill.
+        The frontmatter ``name`` is authoritative; when it differs from the
+        directory name a warning is logged and frontmatter wins. When ``name``
+        is missing and the directory name is a valid skill name, the directory
+        name is used (with a warning); any other parse failure skips the skill.
+        This is the Git-side manifest-reading strategy passed to the shared
+        :class:`SkillLoader`.
 
         Args:
             manifest_path: Path to the SKILL.md file.
@@ -730,7 +801,7 @@ class GitSkillRepository:
             A ``(manifest, body)`` tuple, or None if the skill must be skipped.
         """
         try:
-            return self._parser.parse_file(manifest_path)
+            manifest, body = self._parser.parse_file(manifest_path)
         except MissingRequiredFieldError as exc:
             if exc.field != "name" or not SkillName.is_valid(dir_name):
                 logger.warning("Skipping skill at %s: %s", manifest_path.parent, exc)
@@ -739,6 +810,14 @@ class GitSkillRepository:
         except ManifestParseError as exc:
             logger.warning("Skipping skill at %s: %s", manifest_path.parent, exc)
             return None
+
+        if manifest.name.value != dir_name:
+            logger.warning(
+                "Skill name %r differs from directory %r; frontmatter wins",
+                manifest.name.value,
+                dir_name,
+            )
+        return manifest, body
 
     def _parse_with_dir_name(
         self, manifest_path: Path, dir_name: str
@@ -760,52 +839,6 @@ class GitSkillRepository:
             dir_name,
         )
         return manifest, body
-
-    async def _discover_resources(
-        self, resource_dir: Path, skill_dir: Path
-    ) -> list[SkillResource]:
-        """Discover resources in a resource directory.
-
-        Args:
-            resource_dir: The directory to scan (scripts/, references/, assets/).
-            skill_dir: The skill directory (for path safety checks).
-
-        Returns:
-            List of discovered resources.
-        """
-        # sync local-fs by design
-        if not resource_dir.exists() or not resource_dir.is_dir():  # noqa: ASYNC240
-            return []
-
-        resources = []
-        for item in resource_dir.iterdir():  # noqa: ASYNC240  # sync local-fs by design
-            if not item.is_file():
-                continue
-            if item.name.startswith("."):
-                continue
-
-            try:
-                resolved_path = item.resolve()
-                if not self._is_path_safe(resolved_path, skill_dir):
-                    logger.warning(
-                        "Skipping resource outside skill directory: %s", item
-                    )
-                    continue
-
-                content = item.read_bytes()
-                token_count = self._token_estimator.estimate_file(content)
-                resource = SkillResource.from_path(
-                    resolved_path,
-                    token_count,
-                    last_modified=file_mtime_utc(resolved_path),
-                )
-                resources.append(resource)
-            except OSError as exc:
-                logger.warning("Failed to read resource %s: %s", item, exc)
-            except ValueError as exc:
-                logger.warning("Invalid resource %s: %s", item, exc)
-
-        return resources
 
     def _repo_cache_root(self, ref: GitSkillReference) -> Path:
         """Return the per-repository cache root (host/owner/repo)."""
@@ -847,20 +880,3 @@ class GitSkillRepository:
     def _sanitize(part: str) -> str:
         """Sanitize a reference component for use as a cache path segment."""
         return part.replace("/", "_").replace(":", "_")
-
-    def _is_path_safe(self, path: Path, base_path: Path) -> bool:
-        """Check if a path is safe (within the base path).
-
-        Args:
-            path: The path to check.
-            base_path: The base path that should contain the file.
-
-        Returns:
-            True if the path is safe, False otherwise.
-        """
-        try:
-            resolved = path.resolve()
-            base_resolved = base_path.resolve()
-            return resolved.is_relative_to(base_resolved)
-        except (ValueError, OSError):
-            return False

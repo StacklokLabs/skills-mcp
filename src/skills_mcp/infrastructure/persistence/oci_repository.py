@@ -17,18 +17,24 @@ from typing import TYPE_CHECKING
 import oras.client
 
 from skills_mcp.domain.exceptions import ResourceNotFoundError, SkillNotFoundError
-from skills_mcp.domain.models.resource import ResourceType, SkillResource
-from skills_mcp.domain.models.skill import Skill
+from skills_mcp.domain.models.resource import ResourceType
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.domain.services.token_estimator import TokenEstimator
-from skills_mcp.infrastructure.persistence.mtime import file_mtime_utc
 from skills_mcp.infrastructure.persistence.oci_models import (
     OCIRepositoryConfig,
     OCISkillReference,
 )
+from skills_mcp.infrastructure.persistence.skill_loader import (
+    MAX_RESOURCE_SIZE_BYTES,
+    SkillLoader,
+    is_path_safe,
+)
 
 
 if TYPE_CHECKING:
+    from skills_mcp.domain.models.manifest import SkillManifest
+    from skills_mcp.domain.models.resource import SkillResource
+    from skills_mcp.domain.models.skill import Skill
     from skills_mcp.domain.models.skill_name import SkillName
 
 
@@ -36,9 +42,6 @@ logger = logging.getLogger(__name__)
 
 
 SKILL_MANIFEST_FILENAME = "SKILL.md"
-
-# Maximum resource size (10 MB) to prevent memory exhaustion
-MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024
 
 # Security limits for tarball extraction
 MAX_TARBALL_FILES = 1000  # Maximum files per skill
@@ -81,6 +84,7 @@ class OCISkillRepository:
         self._config = config
         self._parser = parser or ManifestParser()
         self._token_estimator = token_estimator or TokenEstimator()
+        self._loader = SkillLoader(self._parser, self._token_estimator)
         self._skills_cache: dict[str, Skill] | None = None
         self._cache_lock = asyncio.Lock()
         self._cache_dir = config.cache_dir or OCIRepositoryConfig.default_cache_dir()
@@ -366,88 +370,34 @@ class OCISkillRepository:
             # Extract all members (filter="data" provides additional safety)
             tar.extractall(output_dir, filter="data")
 
-    async def _load_skill_from_dir(self, skill_dir: Path, manifest_path: Path) -> Skill:
-        """Load a skill from an extracted directory.
+    async def _load_skill_from_dir(
+        self, skill_dir: Path, manifest_path: Path
+    ) -> Skill | None:
+        """Load a skill from an extracted directory (strict manifest parsing).
 
         Args:
             skill_dir: The skill directory.
             manifest_path: Path to the SKILL.md file.
 
         Returns:
-            The loaded Skill object.
+            The loaded Skill object, or None if the manifest escapes the
+            skill directory.
         """
-        # Parse the manifest
-        manifest, body = self._parser.parse_file(manifest_path)
-
-        # Estimate tokens for the body
-        token_count = self._token_estimator.estimate(body)
-
-        # Discover resources
-        scripts = await self._discover_resources(skill_dir / "scripts", skill_dir)
-        references = await self._discover_resources(skill_dir / "references", skill_dir)
-        assets = await self._discover_resources(skill_dir / "assets", skill_dir)
-
-        return Skill(
-            manifest=manifest,
-            body=body,
-            path=skill_dir.resolve(),  # noqa: ASYNC240  # sync local-fs by design
-            scripts=scripts,
-            references=references,
-            assets=assets,
-            token_count=token_count,
-            last_modified=file_mtime_utc(manifest_path),
+        return self._loader.load_skill(
+            skill_dir, manifest_path, self._read_manifest_strict
         )
+
+    def _read_manifest_strict(
+        self, manifest_path: Path, _dir_name: str
+    ) -> tuple[SkillManifest, str]:
+        """Parse a manifest strictly; a missing required field is an error."""
+        return self._parser.parse_file(manifest_path)
 
     async def _discover_resources(
         self, resource_dir: Path, skill_dir: Path
     ) -> list[SkillResource]:
-        """Discover resources in a resource directory.
-
-        Args:
-            resource_dir: The directory to scan (scripts/, references/, or assets/).
-            skill_dir: The skill directory (for path safety checks).
-
-        Returns:
-            List of discovered resources.
-        """
-        # sync local-fs by design
-        if not resource_dir.exists() or not resource_dir.is_dir():  # noqa: ASYNC240
-            return []
-
-        resources = []
-        for item in resource_dir.iterdir():  # noqa: ASYNC240  # sync local-fs by design
-            if not item.is_file():
-                continue
-
-            # Skip hidden files
-            if item.name.startswith("."):
-                continue
-
-            try:
-                # Resolve the path and check for path traversal
-                resolved_path = item.resolve()
-                if not self._is_path_safe(resolved_path, skill_dir):
-                    logger.warning(
-                        "Skipping resource outside skill directory: %s", item
-                    )
-                    continue
-
-                # Estimate token count for the resource
-                content = item.read_bytes()
-                token_count = self._token_estimator.estimate_file(content)
-
-                resource = SkillResource.from_path(
-                    resolved_path,
-                    token_count,
-                    last_modified=file_mtime_utc(resolved_path),
-                )
-                resources.append(resource)
-            except OSError as e:
-                logger.warning("Failed to read resource %s: %s", item, e)
-            except ValueError as e:
-                logger.warning("Invalid resource %s: %s", item, e)
-
-        return resources
+        """Discover resources in a resource directory (delegates to loader)."""
+        return self._loader.discover_resources(resource_dir, skill_dir)
 
     def _get_skill_cache_dir(self, ref: OCISkillReference) -> Path:
         """Get the local cache directory for a skill.
@@ -466,21 +416,5 @@ class OCISkillRepository:
         return self._cache_dir / safe_registry / safe_namespace / ref.name / safe_tag
 
     def _is_path_safe(self, path: Path, base_path: Path) -> bool:
-        """Check if a path is safe (within the base path).
-
-        This prevents path traversal attacks by ensuring the resolved path
-        is within the expected skill directory.
-
-        Args:
-            path: The path to check.
-            base_path: The base path that should contain the file.
-
-        Returns:
-            True if the path is safe, False otherwise.
-        """
-        try:
-            resolved = path.resolve()
-            base_resolved = base_path.resolve()
-            return resolved.is_relative_to(base_resolved)
-        except (ValueError, OSError):
-            return False
+        """Check if a path is safe (within the base path); see skill_loader."""
+        return is_path_safe(path, base_path)
