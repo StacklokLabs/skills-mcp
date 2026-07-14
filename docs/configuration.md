@@ -49,6 +49,9 @@ server:
   host: 127.0.0.1
   port: 8080
   log_level: WARNING
+  # Directories under which validate_skill may operate (empty = disabled)
+  validation_paths:
+    - ./skills
 ```
 
 ### Environment Variable Expansion
@@ -98,6 +101,7 @@ skills-mcp
 
 ```
 usage: skills-mcp [-h] [-c CONFIG] [--host HOST] [--port PORT]
+                  [--validation-path PATH]
 
 MCP server for Agent Skills
 
@@ -106,7 +110,31 @@ options:
   -c, --config CONFIG   Path to configuration file
   --host HOST           Host to bind to (overrides config/env)
   --port PORT           Port to bind to (overrides config/env)
+  --validation-path PATH
+                        Directory under which validate_skill may operate
+                        (repeatable; overrides server.validation_paths)
 ```
+
+### Enabling `validate_skill`
+
+The `validate_skill` tool is disabled by default. Enable it by allow-listing
+one or more directories it may inspect, either on the command line (repeatable,
+takes precedence) or in the config file:
+
+```bash
+skills-mcp --validation-path ./skills --validation-path /srv/skills
+```
+
+```yaml
+server:
+  validation_paths:
+    - ./skills
+    - /srv/skills
+```
+
+A path passed to `validate_skill` that resolves outside every allow-listed
+directory is refused. With no paths configured, the tool reports that
+validation is disabled.
 
 ## Skill Sources
 

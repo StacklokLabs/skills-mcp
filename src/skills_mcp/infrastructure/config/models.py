@@ -122,11 +122,14 @@ class ServerConfig(BaseModel):
         host: Host to bind to.
         port: Port to bind to.
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+        validation_paths: Directories under which the ``validate_skill`` tool
+            is permitted to operate. Empty (the default) disables the tool.
     """
 
     host: str = "127.0.0.1"
     port: Annotated[int, Field(ge=1, le=65535)] = 8080
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "WARNING"
+    validation_paths: list[Path] = Field(default_factory=list)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -135,6 +138,12 @@ class ServerConfig(BaseModel):
         if isinstance(v, str):
             return v.upper()
         return v
+
+    @field_validator("validation_paths", mode="before")
+    @classmethod
+    def expand_validation_paths(cls, v: list[str | Path]) -> list[Path]:
+        """Expand ~ in validation paths."""
+        return [Path(p).expanduser() for p in v]
 
 
 class SkillsConfig(BaseModel):

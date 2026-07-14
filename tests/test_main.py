@@ -1,9 +1,10 @@
 """Tests for __main__.py entry point."""
 
+import argparse
 import logging
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,7 +12,13 @@ from skills_mcp.__main__ import (
     get_skill_paths_from_env,
     load_configuration,
     parse_args,
+    run_server,
     setup_logging,
+)
+from skills_mcp.infrastructure.config.models import (
+    LocalSourceConfig,
+    ServerConfig,
+    SkillsConfig,
 )
 
 
@@ -185,6 +192,36 @@ class TestParseArgs:
         assert args.host == "192.168.1.1"
         assert args.port == 9999
 
+    def test_validation_path_defaults_to_none(self) -> None:
+        """No --validation-path yields None (distinct from an empty list)."""
+        with patch("sys.argv", ["skills-mcp"]):
+            args = parse_args()
+
+        assert args.validation_paths is None
+
+    def test_single_validation_path(self) -> None:
+        """A single --validation-path is collected into a list."""
+        with patch("sys.argv", ["skills-mcp", "--validation-path", "/skills"]):
+            args = parse_args()
+
+        assert args.validation_paths == [Path("/skills")]
+
+    def test_validation_path_is_repeatable(self) -> None:
+        """--validation-path may be given multiple times."""
+        with patch(
+            "sys.argv",
+            [
+                "skills-mcp",
+                "--validation-path",
+                "/skills",
+                "--validation-path",
+                "/more",
+            ],
+        ):
+            args = parse_args()
+
+        assert args.validation_paths == [Path("/skills"), Path("/more")]
+
 
 class TestLoadConfiguration:
     """Tests for load_configuration function."""
@@ -223,3 +260,69 @@ class TestLoadConfiguration:
 
         assert result is not None
         assert result.version == "1"
+
+
+class TestRunServerValidationPaths:
+    """Tests for validation_paths precedence and wiring into the server."""
+
+    @staticmethod
+    def _args(validation_paths: list[Path] | None) -> argparse.Namespace:
+        return argparse.Namespace(
+            config=None,
+            host=None,
+            port=None,
+            validation_paths=validation_paths,
+        )
+
+    @staticmethod
+    def _config(validation_paths: list[Path]) -> SkillsConfig:
+        return SkillsConfig(
+            local=LocalSourceConfig(paths=[Path("/skills")]),
+            server=ServerConfig(validation_paths=validation_paths),
+        )
+
+    async def _run(self, args: argparse.Namespace, config: SkillsConfig) -> MagicMock:
+        """Run run_server with mocked repo + server, return the server mock."""
+        server_cls = MagicMock()
+        server_cls.return_value.run_http = AsyncMock()
+        with (
+            patch("skills_mcp.__main__.parse_args", return_value=args),
+            patch("skills_mcp.__main__.load_configuration", return_value=config),
+            patch(
+                "skills_mcp.__main__.create_repository_from_skills_config",
+                return_value=MagicMock(),
+            ),
+            patch("skills_mcp.__main__.SkillsMCPServer", server_cls),
+        ):
+            await run_server()
+        return server_cls
+
+    async def test_cli_overrides_config(self) -> None:
+        """CLI --validation-path takes precedence over the config file."""
+        args = self._args([Path("/cli")])
+        config = self._config([Path("/config")])
+
+        server_cls = await self._run(args, config)
+
+        _, kwargs = server_cls.call_args
+        assert kwargs["allowed_validation_paths"] == [Path("/cli")]
+
+    async def test_falls_back_to_config(self) -> None:
+        """Config validation_paths are used when no CLI flag is given."""
+        args = self._args(None)
+        config = self._config([Path("/config")])
+
+        server_cls = await self._run(args, config)
+
+        _, kwargs = server_cls.call_args
+        assert kwargs["allowed_validation_paths"] == [Path("/config")]
+
+    async def test_disabled_when_neither_set(self) -> None:
+        """With no CLI flag and empty config, validation is disabled (None)."""
+        args = self._args(None)
+        config = self._config([])
+
+        server_cls = await self._run(args, config)
+
+        _, kwargs = server_cls.call_args
+        assert kwargs["allowed_validation_paths"] is None

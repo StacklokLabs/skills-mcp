@@ -76,6 +76,19 @@ def parse_args() -> argparse.Namespace:
         help="Port to bind to (overrides config file and SKILLS_MCP_PORT env var)",
     )
 
+    parser.add_argument(
+        "--validation-path",
+        type=Path,
+        action="append",
+        dest="validation_paths",
+        metavar="PATH",
+        help=(
+            "Directory under which the validate_skill tool may operate "
+            "(repeatable). Overrides validation_paths in the config file. "
+            "If neither is set, validate_skill is disabled."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -174,6 +187,11 @@ async def run_server() -> None:
     # CLI args override config (which already has env var overrides applied)
     host = args.host if args.host is not None else config.server.host
     port = args.port if args.port is not None else config.server.port
+    validation_paths = (
+        args.validation_paths
+        if args.validation_paths is not None
+        else config.server.validation_paths
+    )
 
     # Create repository
     if config.has_local_sources() or config.has_oci_sources():
@@ -190,7 +208,12 @@ async def run_server() -> None:
 
     # Create and run server
     logger.info("Starting skills-mcp server on %s:%d", host, port)
-    server = SkillsMCPServer(repository)
+    if validation_paths:
+        logger.info("validate_skill enabled for paths: %s", validation_paths)
+    server = SkillsMCPServer(
+        repository,
+        allowed_validation_paths=validation_paths or None,
+    )
     await server.run_http(host=host, port=port)
 
 

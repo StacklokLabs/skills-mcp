@@ -56,7 +56,7 @@ The tier model above is exposed through three complementary MCP surfaces. Differ
   - `list_skills` - Tier 1 catalog. The tool's own description embeds the current `<available_skills>` list (name + short description), matching Claude Code's pattern of surfacing the catalog in the description so a model knows what exists without a separate call.
   - `get_skill` - Tier 2 activation; also marks the skill expanded for the session.
   - `get_skill_resource` - Tier 3 resource load, addressed as `type/filename`.
-  - `validate_skill` - validates a skill directory against the spec. It is gated: unless the server is constructed with an explicit allow-list of validation paths it returns a "validation is disabled" message. The bundled entry point does not currently wire this option, so it is off by default.
+  - `validate_skill` - validates a skill directory against the spec. It is gated: unless the server is given an explicit allow-list of validation paths it returns a "validation is disabled" message. The entry point wires this allow-list from the repeatable `--validation-path` CLI flag or the `server.validation_paths` config option (CLI takes precedence), so the tool is off by default and opt-in.
 - **Prompts** - each skill is exposed as an MCP prompt (one per skill). Clients like Continue convert MCP prompts into slash commands, so users get `/skill-name` invocation. `prompts/get` returns the SKILL.md body as a user message, appending any `args` and a resource listing, mimicking how Claude Code injects skill content via prompt expansion.
 
 The server also declares MCP **instructions** that direct clients to the `list_skills` → `get_skill` → `get_skill_resource` workflow.

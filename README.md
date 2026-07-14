@@ -52,7 +52,7 @@ The same skills are exposed through three complementary MCP surfaces, so a clien
   - `list_skills` - Tier 1 catalog (names, descriptions, resource counts). The available skills are also embedded directly in the tool's description, so a model can see what exists without a separate call.
   - `get_skill` - Tier 2 activation: load a skill's full instructions and its resource listing.
   - `get_skill_resource` - Tier 3: load a specific resource file (`type/filename`, e.g. `scripts/analyze.py`).
-  - `validate_skill` - Validate a skill directory against the spec. Currently always disabled: enabling it requires an allow-list of directories that is not yet wired to any CLI flag or config option, so the tool answers with a "validation is disabled" message.
+  - `validate_skill` - Validate a skill directory against the spec. Disabled by default; enable it by allow-listing directories with the repeatable `--validation-path` CLI flag or the `server.validation_paths` config option. A path outside the allow-list is refused, and with no paths configured the tool answers with a "validation is disabled" message.
 - **Prompts** - Each skill is also exposed as an MCP prompt. Clients like Continue turn MCP prompts into slash commands, giving users `/skill-name` invocation.
 
 The server also ships MCP **instructions** that point clients at the `list_skills` → `get_skill` → `get_skill_resource` workflow.

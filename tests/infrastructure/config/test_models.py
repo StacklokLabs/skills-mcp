@@ -9,8 +9,28 @@ from skills_mcp.infrastructure.config.models import (
     OCIAuthConfig,
     OCISkillConfig,
     OCISourceConfig,
+    ServerConfig,
     SkillsConfig,
 )
+
+
+class TestServerConfigValidationPaths:
+    """Tests for ServerConfig.validation_paths."""
+
+    def test_defaults_to_empty(self) -> None:
+        """validation_paths defaults to an empty list (validation disabled)."""
+        config = ServerConfig()
+        assert config.validation_paths == []
+
+    def test_parses_paths(self) -> None:
+        """validation_paths accepts a list of path strings."""
+        config = ServerConfig(validation_paths=["/skills", "/more"])
+        assert config.validation_paths == [Path("/skills"), Path("/more")]
+
+    def test_expands_tilde(self) -> None:
+        """validation_paths expands ~ to the home directory."""
+        config = ServerConfig(validation_paths=["~/skills"])
+        assert config.validation_paths[0] == Path.home() / "skills"
 
 
 class TestLocalSourceConfig:
