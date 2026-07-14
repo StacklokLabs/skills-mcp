@@ -28,6 +28,13 @@ class CompositeSkillRepository:
     taking precedence for name conflicts. This allows local skills to
     override remote skills with the same name.
 
+    When two repositories expose a skill with the same name, the lower-priority
+    one is shadowed. The first such collision for a given (name, winner, loser)
+    triple is surfaced at WARNING level with source provenance so operators can
+    diagnose unexpected shadowing; subsequent occurrences of the same collision
+    are logged at DEBUG to avoid log spam (``list_all`` runs on every
+    ``resources/list``, ``tools/list``, ``prompts/list``, and ``list_skills``).
+
     Example:
         local_repo = LocalSkillRepository([Path("./skills")])
         oci_repo = OCISkillRepository(oci_config)
@@ -44,27 +51,60 @@ class CompositeSkillRepository:
         if not repositories:
             raise ValueError("At least one repository is required")
         self._repositories = repositories
+        # Tracks (name, winner index, loser index) collisions already warned
+        # about, so each unique collision is surfaced at WARNING only once.
+        self._warned_collisions: set[tuple[str, int, int]] = set()
+
+    def _source_label(self, index: int) -> str:
+        """Return a human-readable provenance label for a repository index.
+
+        Args:
+            index: The index of the repository in the priority-ordered list.
+
+        Returns:
+            A label like ``LocalSkillRepository[0]`` identifying the source.
+        """
+        return f"{type(self._repositories[index]).__name__}[{index}]"
 
     async def list_all(self) -> list[Skill]:
         """List all skills from all repositories.
+
+        If multiple repositories expose a skill with the same name, the
+        first (highest-priority) repository's version wins and the shadowed
+        version is dropped. The first occurrence of each unique collision is
+        logged at WARNING with source provenance; repeats are logged at DEBUG.
 
         Returns:
             Combined list of skills. If multiple repositories have a skill
             with the same name, the first repository's version is used.
         """
-        seen_names: set[str] = set()
+        first_seen: dict[str, int] = {}
         all_skills: list[Skill] = []
 
-        for repo in self._repositories:
+        for idx, repo in enumerate(self._repositories):
             skills = await repo.list_all()
             for skill in skills:
-                if skill.name.value not in seen_names:
-                    seen_names.add(skill.name.value)
+                name = skill.name.value
+                if name not in first_seen:
+                    first_seen[name] = idx
                     all_skills.append(skill)
                 else:
-                    logger.debug(
-                        "Skipping duplicate skill '%s' from lower-priority repository",
-                        skill.name.value,
+                    winner_idx = first_seen[name]
+                    collision = (name, winner_idx, idx)
+                    # First sighting of a unique collision warns; repeats drop
+                    # to DEBUG so per-request list_all calls don't flood logs.
+                    if collision in self._warned_collisions:
+                        level = logging.DEBUG
+                    else:
+                        self._warned_collisions.add(collision)
+                        level = logging.WARNING
+                    logger.log(
+                        level,
+                        "Skill name collision: '%s' from %s is shadowed by %s "
+                        "(first-listed repository wins)",
+                        name,
+                        self._source_label(idx),
+                        self._source_label(winner_idx),
                     )
 
         return all_skills

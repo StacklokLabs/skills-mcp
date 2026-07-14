@@ -1,5 +1,6 @@
 """Tests for composite repository."""
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -87,6 +88,93 @@ class TestCompositeSkillRepository:
 
         assert len(skills) == 1
         assert skills[0].version == "v1"
+
+    async def test_list_all_name_collision_logs_warning_with_provenance(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should warn once with source provenance when names collide."""
+        skill_v1 = create_mock_skill("dup-skill")
+        skill_v2 = create_mock_skill("dup-skill")
+
+        repo1 = create_mock_repository([skill_v1])
+        repo2 = create_mock_repository([skill_v2])
+
+        composite = CompositeSkillRepository([repo1, repo2])
+
+        with caplog.at_level(logging.WARNING):
+            skills = await composite.list_all()
+
+        # Winner selection unchanged: single skill from repo[0].
+        assert len(skills) == 1
+        assert skills[0] is skill_v1
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        message = warnings[0].getMessage()
+        assert "dup-skill" in message
+        # Ordered assertion: repo[1] is shadowed BY repo[0] (winner). Swapping
+        # the winner/loser labels must fail this test. Mocks are MagicMock
+        # instances -> labels reflect the class name + index.
+        assert "from MagicMock[1] is shadowed by MagicMock[0]" in message
+
+    async def test_list_all_repeated_collision_warns_only_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should warn only once even across repeated list_all calls."""
+        repo1 = create_mock_repository([create_mock_skill("dup-skill")])
+        repo2 = create_mock_repository([create_mock_skill("dup-skill")])
+
+        composite = CompositeSkillRepository([repo1, repo2])
+
+        with caplog.at_level(logging.WARNING):
+            await composite.list_all()
+            await composite.list_all()
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+
+    async def test_list_all_repeated_collision_logs_debug_on_repeat(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should log the repeat collision at DEBUG (not silently drop it)."""
+        repo1 = create_mock_repository([create_mock_skill("dup-skill")])
+        repo2 = create_mock_repository([create_mock_skill("dup-skill")])
+
+        composite = CompositeSkillRepository([repo1, repo2])
+
+        with caplog.at_level(logging.DEBUG):
+            await composite.list_all()  # first call -> WARNING
+            caplog.clear()
+            await composite.list_all()  # repeat -> DEBUG
+
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.DEBUG and "dup-skill" in r.getMessage()
+        ]
+        assert len(debug_records) == 1
+        assert (
+            "from MagicMock[1] is shadowed by MagicMock[0]"
+            in debug_records[0].getMessage()
+        )
+        # And no second WARNING was emitted on the repeat.
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 0
+
+    async def test_list_all_no_collision_emits_no_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Should not warn when skill names are disjoint."""
+        repo1 = create_mock_repository([create_mock_skill("skill-one")])
+        repo2 = create_mock_repository([create_mock_skill("skill-two")])
+
+        composite = CompositeSkillRepository([repo1, repo2])
+
+        with caplog.at_level(logging.WARNING):
+            await composite.list_all()
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 0
 
     async def test_find_by_name_found_in_first_repo(self) -> None:
         """Should find skill in first repository."""
