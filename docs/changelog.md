@@ -26,6 +26,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Declared `starlette>=0.50` as a direct dependency; `server.py` imports
   Starlette APIs directly but relied on it transitively via `mcp`.
+- Skill name collisions across composite repositories now surface at WARNING
+  level with source provenance (which repository is shadowed by which) instead
+  of being dropped silently at DEBUG; each unique collision warns once.
+- Expired sessions are now evicted by a periodic cleanup task wired into the
+  server's ASGI lifespan, so long-running servers no longer accumulate stale
+  session state unboundedly.
+- Session-ID resolution now fails closed: requests without an MCP session ID
+  are treated as sessionless rather than sharing a single `"default"` session,
+  preventing expanded-skill state from bleeding across unrelated requests.
 
 ## [0.1.0] - TBD
 

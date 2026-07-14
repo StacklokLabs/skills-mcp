@@ -1,7 +1,11 @@
 """Tests for MCP server."""
 
+import asyncio
+import contextlib
+import logging
+from datetime import timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 
@@ -12,6 +16,7 @@ from skills_mcp.infrastructure.mcp.server import (
     SKILL_URI_SCHEME,
     SkillsMCPServer,
 )
+from skills_mcp.infrastructure.mcp.session import SessionManager
 
 
 def create_mock_manifest(name: str, description: str = "Test description") -> MagicMock:
@@ -462,8 +467,10 @@ class TestSkillsMCPServerNotifications:
         # Should NOT have called the notification (already expanded)
         server._send_resources_list_changed.assert_not_called()
 
-    async def test_read_skill_uses_default_session_when_no_context(self) -> None:
-        """Should use 'default' session when no request context available."""
+    async def test_read_skill_no_session_context_skips_expansion_and_notification(
+        self,
+    ) -> None:
+        """Sessionless read returns content but tracks no expansion state."""
         skill = create_mock_skill("test-skill")
         repo = AsyncMock()
         repo.find_by_name.return_value = skill
@@ -473,11 +480,16 @@ class TestSkillsMCPServerNotifications:
         # Mock the notification method
         server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
 
-        # _get_session_id returns "default" when no context
-        await server._handle_read_resource(f"{SKILL_URI_SCHEME}://test-skill")
+        # No request context -> _get_session_id returns None (fail closed).
+        contents = await server._handle_read_resource(
+            f"{SKILL_URI_SCHEME}://test-skill"
+        )
 
-        # Should still call notification (first access for "default" session)
-        server._send_resources_list_changed.assert_called_once()
+        # Content is still returned to the caller.
+        assert len(contents) == 1
+        # No notification and no session state created for a sessionless request.
+        server._send_resources_list_changed.assert_not_called()
+        assert server._session_manager.session_count == 0
 
 
 class TestSkillsMCPServerSessionIsolation:
@@ -547,3 +559,227 @@ class TestSkillsMCPServerSessionIsolation:
         assert not server._session_manager.is_expanded(
             "client-b", SkillName("shared-skill")
         )
+
+
+class TestSkillsMCPServerSessionIdFailClosed:
+    """Tests for fail-closed session-ID resolution (no shared 'default')."""
+
+    async def test_get_session_id_no_request_context_returns_none(self) -> None:
+        """Should return None when there is no request context."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        # No active request context -> LookupError -> None.
+        assert server._get_session_id() is None
+
+    def test_get_session_id_returns_header_value(self) -> None:
+        """Should return the mcp-session-id header value when present."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        mock_request = MagicMock()
+        mock_request.headers = {"mcp-session-id": "abc123"}
+        mock_ctx = MagicMock()
+        mock_ctx.request = mock_request
+
+        with patch.object(
+            type(server.server),
+            "request_context",
+            new_callable=PropertyMock,
+            return_value=mock_ctx,
+        ):
+            assert server._get_session_id() == "abc123"
+
+    def test_get_session_id_in_context_without_header_returns_none_logs_debug(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """In-context request lacking the header returns None and logs at DEBUG.
+
+        This is the happy-path initialize case, so it must NOT warn.
+        """
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo)
+
+        mock_request = MagicMock()
+        mock_request.headers = {}  # no mcp-session-id header
+        mock_ctx = MagicMock()
+        mock_ctx.request = mock_request
+
+        with (
+            patch.object(
+                type(server.server),
+                "request_context",
+                new_callable=PropertyMock,
+                return_value=mock_ctx,
+            ),
+            caplog.at_level(logging.DEBUG),
+        ):
+            result = server._get_session_id()
+
+        assert result is None
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.DEBUG
+            and "no mcp session id header" in r.getMessage().lower()
+        ]
+        assert len(debug_records) == 1
+        # Must not warn on the happy path.
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+    async def test_list_resources_no_session_context_hides_sub_resources(self) -> None:
+        """Sessionless listing must not leak sub-resources from prior pollution."""
+        script = SkillResource(
+            name="helper.py",
+            path=Path("/skills/skill1/scripts/helper.py"),
+            resource_type=ResourceType.SCRIPT,
+            token_count=100,
+        )
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill("skill1", scripts=[script]),
+            create_mock_skill("skill2"),
+        ]
+
+        server = SkillsMCPServer(repo)
+
+        # Simulate pre-fix pollution: something marked "default" as expanded.
+        server._session_manager.mark_expanded("default", SkillName("skill1"))
+
+        # No request context -> sessionless -> sub-resources must stay hidden.
+        resources = await server._handle_list_resources()
+        uris = [str(r.uri) for r in resources]
+
+        assert f"{SKILL_URI_SCHEME}://skill1/scripts/helper.py" not in uris
+        # Base skill resources remain visible.
+        assert f"{SKILL_URI_SCHEME}://skill1" in uris
+        assert f"{SKILL_URI_SCHEME}://skill2" in uris
+
+    async def test_tool_get_skill_no_session_context_returns_full_content(self) -> None:
+        """get_skill returns full content even for a sessionless request."""
+        skill = create_mock_skill("test-skill")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        result = await server._tool_get_skill("test-skill")
+
+        assert len(result) == 1
+        assert "Error" not in result[0].text
+        server._send_resources_list_changed.assert_not_called()
+        assert server._session_manager.session_count == 0
+
+    async def test_tool_get_skill_resource_no_session_context_returns_content(
+        self,
+    ) -> None:
+        """get_skill_resource returns content sessionlessly, tracks no state."""
+        repo = AsyncMock()
+        repo.get_resource_content.return_value = b"print('hi')\n"
+
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        result = await server._tool_get_skill_resource("test-skill", "scripts/run.py")
+
+        assert len(result) == 1
+        assert result[0].text == "print('hi')\n"
+        server._send_resources_list_changed.assert_not_called()
+        assert server._session_manager.session_count == 0
+
+    async def test_get_prompt_no_session_context_returns_content(self) -> None:
+        """get_prompt returns the skill body sessionlessly, tracks no state."""
+        skill = create_mock_skill("test-skill", body="# Body\n\nInstructions")
+        repo = AsyncMock()
+        repo.find_by_name.return_value = skill
+
+        server = SkillsMCPServer(repo)
+        server._send_resources_list_changed = AsyncMock()  # type: ignore[method-assign]
+
+        result = await server._handle_get_prompt("test-skill")
+
+        assert len(result.messages) == 1
+        assert "Instructions" in result.messages[0].content.text  # type: ignore[union-attr]
+        server._send_resources_list_changed.assert_not_called()
+        assert server._session_manager.session_count == 0
+
+
+class TestSkillsMCPServerSessionCleanup:
+    """Tests for the periodic session-cleanup background task."""
+
+    async def test_session_cleanup_loop_removes_expired_sessions(self) -> None:
+        """The cleanup loop should evict expired sessions on its interval."""
+        repo = AsyncMock()
+        manager = SessionManager(timeout=timedelta(seconds=0))
+        server = SkillsMCPServer(
+            repo,
+            session_manager=manager,
+            session_cleanup_interval=0.01,
+        )
+
+        manager.get_or_create("stale")
+        assert manager.session_count == 1
+
+        task = asyncio.create_task(server._session_cleanup_loop())
+        try:
+            deadline = 2.0
+            elapsed = 0.0
+            while manager.session_count != 0 and elapsed < deadline:
+                await asyncio.sleep(0.01)
+                elapsed += 0.01
+            assert manager.session_count == 0
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def test_session_cleanup_loop_continues_after_cleanup_error(self) -> None:
+        """A failing sweep must not kill the loop; it retries next interval."""
+        repo = AsyncMock()
+        manager = MagicMock()
+        call_count = 0
+
+        def cleanup_expired() -> int:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("boom")
+            return 0
+
+        manager.cleanup_expired.side_effect = cleanup_expired
+        server = SkillsMCPServer(
+            repo,
+            session_manager=manager,
+            session_cleanup_interval=0.01,
+        )
+
+        task = asyncio.create_task(server._session_cleanup_loop())
+        try:
+            deadline = 2.0
+            elapsed = 0.0
+            while call_count < 2 and elapsed < deadline:
+                await asyncio.sleep(0.01)
+                elapsed += 0.01
+            assert call_count >= 2
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    async def test_create_asgi_app_lifespan_starts_and_cancels_cleanup_task(
+        self,
+    ) -> None:
+        """Lifespan should start exactly one cleanup task and cancel it on exit."""
+        repo = AsyncMock()
+        server = SkillsMCPServer(repo, session_cleanup_interval=3600.0)
+        app = server.create_asgi_app()
+
+        async with app.router.lifespan_context(app):
+            task = server._session_cleanup_task
+            assert task is not None
+            assert not task.done()
+
+        # After lifespan exit the task is cancelled/awaited and cleared.
+        assert server._session_cleanup_task is None
+        assert task.done()

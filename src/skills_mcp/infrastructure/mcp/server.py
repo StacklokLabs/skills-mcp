@@ -17,6 +17,7 @@ maximize compatibility across different AI coding agents:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -70,6 +71,9 @@ DEFAULT_PORT = 8080
 # MCP Session ID header name
 MCP_SESSION_ID_HEADER = "mcp-session-id"
 
+# Default interval between periodic session-cleanup sweeps (seconds)
+DEFAULT_SESSION_CLEANUP_INTERVAL_SECONDS: float = 3600.0
+
 
 class SkillsMCPServer:
     """MCP server that exposes Agent Skills with progressive disclosure.
@@ -97,6 +101,7 @@ class SkillsMCPServer:
         *,
         session_manager: SessionManager | None = None,
         allowed_validation_paths: list[Path] | None = None,
+        session_cleanup_interval: float = DEFAULT_SESSION_CLEANUP_INTERVAL_SECONDS,
     ) -> None:
         """Initialize the MCP server.
 
@@ -106,9 +111,14 @@ class SkillsMCPServer:
                 If not provided, a new one is created.
             allowed_validation_paths: Optional list of paths where validate_skill
                 tool is allowed to operate. If not provided, validation is disabled.
+            session_cleanup_interval: Seconds between periodic sweeps that evict
+                expired sessions. Exposed primarily as a determinism hook for
+                tests; production uses the hourly default.
         """
         self._repository = repository
         self._session_manager = session_manager or SessionManager()
+        self._session_cleanup_interval = session_cleanup_interval
+        self._session_cleanup_task: asyncio.Task[None] | None = None
         self._server = Server(
             "skills-mcp",
             instructions=(
@@ -131,14 +141,21 @@ class SkillsMCPServer:
         # Register handlers
         self._register_handlers()
 
-    def _get_session_id(self) -> str:
+    def _get_session_id(self) -> str | None:
         """Get the current MCP session ID from the request context.
 
         The session ID is extracted from the mcp-session-id header which is
-        required on all requests after initialization per the MCP spec.
+        required on all requests after initialization per the MCP spec. When
+        no session ID is available, this returns ``None`` (fail closed) rather
+        than a shared fallback: a shared session ID would let unrelated
+        requests bleed expanded-skill state into each other.
+
+        A request context that lacks the header is normal on the happy path —
+        the SDK assigns the session ID only on the ``initialize`` request — so
+        that case is logged at DEBUG rather than WARNING to avoid log flooding.
 
         Returns:
-            The session ID string, or "default" if not available.
+            The session ID string, or ``None`` if no session ID is available.
         """
         try:
             # Access the Starlette Request object from request context
@@ -148,10 +165,32 @@ class SkillsMCPServer:
                 session_id: str | None = request.headers.get(MCP_SESSION_ID_HEADER)
                 if session_id:
                     return session_id
+            # No session ID header on an in-context request. This is normal on
+            # the initialize request (the SDK assigns the ID there), so log at
+            # DEBUG to avoid flooding logs on the happy path.
+            logger.debug(
+                "No MCP session ID header in request context; "
+                "treating request as sessionless"
+            )
         except LookupError:
             # Outside of request context - this is expected during startup
             logger.debug("No request context available for session ID")
-        return "default"
+        return None
+
+    async def _session_cleanup_loop(self) -> None:
+        """Periodically evict expired sessions until cancelled.
+
+        Runs as a background task for the lifetime of the ASGI app. A failure
+        in a single sweep is logged and swallowed so the loop keeps running.
+        """
+        while True:
+            await asyncio.sleep(self._session_cleanup_interval)
+            try:
+                removed = self._session_manager.cleanup_expired()
+                if removed:
+                    logger.debug("Session cleanup removed %d sessions", removed)
+            except Exception:
+                logger.exception("Session cleanup failed; will retry next interval")
 
     def _register_handlers(self) -> None:
         """Register MCP protocol handlers.
@@ -228,8 +267,11 @@ class SkillsMCPServer:
                 )
             )
 
-            # Only include sub-resources if skill is expanded in this session
-            if self._session_manager.is_expanded(session_id, skill.name):
+            # Only include sub-resources if skill is expanded in this session.
+            # Sessionless requests (session_id is None) never see sub-resources.
+            if session_id is not None and self._session_manager.is_expanded(
+                session_id, skill.name
+            ):
                 resources.extend(
                     Resource(
                         uri=AnyUrl(f"{skill_uri}/scripts/{script.name}"),
@@ -324,14 +366,16 @@ class SkillsMCPServer:
         if skill is None:
             raise ValueError(f"Skill not found: {skill_name.value}")
 
-        # Mark skill as expanded for this session
+        # Mark skill as expanded for this session. Sessionless requests skip
+        # expansion tracking (and the list_changed notification) entirely.
         session_id = self._get_session_id()
-        was_expanded = self._session_manager.is_expanded(session_id, skill_name)
-        self._session_manager.mark_expanded(session_id, skill_name)
+        if session_id is not None:
+            was_expanded = self._session_manager.is_expanded(session_id, skill_name)
+            self._session_manager.mark_expanded(session_id, skill_name)
 
-        # Send list_changed notification if this is a new expansion
-        if not was_expanded:
-            await self._send_resources_list_changed()
+            # Send list_changed notification if this is a new expansion
+            if not was_expanded:
+                await self._send_resources_list_changed()
 
         # Format body with token count header
         content = f"<!-- tokens: {skill.token_count} -->\n\n{skill.body}"
@@ -584,12 +628,14 @@ class SkillsMCPServer:
                 TextContent(type="text", text=f"Error: skill not found: {name_str}")
             ]
 
-        # Mark as expanded for this session (for resource listings)
+        # Mark as expanded for this session (for resource listings).
+        # Sessionless requests skip expansion tracking and notification.
         session_id = self._get_session_id()
-        was_expanded = self._session_manager.is_expanded(session_id, skill_name)
-        self._session_manager.mark_expanded(session_id, skill_name)
-        if not was_expanded:
-            await self._send_resources_list_changed()
+        if session_id is not None:
+            was_expanded = self._session_manager.is_expanded(session_id, skill_name)
+            self._session_manager.mark_expanded(session_id, skill_name)
+            if not was_expanded:
+                await self._send_resources_list_changed()
 
         # Build response with instructions dict (matches Skill.to_instructions_dict)
         result = skill.to_instructions_dict()
@@ -719,12 +765,14 @@ class SkillsMCPServer:
         if skill is None:
             raise ValueError(f"Skill not found: {name}")
 
-        # Mark as expanded for this session
+        # Mark as expanded for this session. Sessionless requests skip
+        # expansion tracking and the list_changed notification.
         session_id = self._get_session_id()
-        was_expanded = self._session_manager.is_expanded(session_id, skill_name)
-        self._session_manager.mark_expanded(session_id, skill_name)
-        if not was_expanded:
-            await self._send_resources_list_changed()
+        if session_id is not None:
+            was_expanded = self._session_manager.is_expanded(session_id, skill_name)
+            self._session_manager.mark_expanded(session_id, skill_name)
+            if not was_expanded:
+                await self._send_resources_list_changed()
 
         # Build the prompt content
         body = skill.body
@@ -887,7 +935,16 @@ class SkillsMCPServer:
             """Manage server lifecycle with the HTTP session manager."""
             async with self._http_session_manager.run():  # type: ignore[union-attr]
                 logger.info("MCP session manager started")
-                yield
+                self._session_cleanup_task = asyncio.create_task(
+                    self._session_cleanup_loop()
+                )
+                try:
+                    yield
+                finally:
+                    self._session_cleanup_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._session_cleanup_task
+                    self._session_cleanup_task = None
                 logger.info("MCP session manager stopped")
 
         # Create the Starlette app with routes
