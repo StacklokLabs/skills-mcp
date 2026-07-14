@@ -39,7 +39,9 @@ See [Architecture](architecture/mcp-server-design.md) for design details.
 
 ## SEP-2640 Alignment
 
-The server tracks the stable parts of the SEP-2640 skills extension: resource
+The server tracks the stable parts of the
+[SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640)
+skills extension: resource
 annotations (`audience`, `priority`, `lastModified`), a bare-URI read guarantee,
 and an experimental capability declaration on `initialize`. Still-churning parts
 (the `skill://` scheme, index/discovery, content digests, directory reads) are

@@ -241,7 +241,7 @@ SKILLS_MCP_LOG_LEVEL="WARNING"                     # Log level
 
 ## SEP-2640 Alignment
 
-[SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol) proposes
+[SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) proposes
 a first-class skills extension for MCP. This server tracks the parts of that
 proposal that have reached stable consensus and defers the parts still churning
 upstream.

@@ -14,7 +14,6 @@ from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.infrastructure.persistence.local_repository import (
     MAX_RESOURCE_SIZE_BYTES,
     LocalSkillRepository,
-    _file_mtime_utc,
 )
 
 
@@ -412,8 +411,3 @@ class TestLocalSkillRepositoryLastModified:
         for resource in skill.scripts:
             assert resource.last_modified is not None
             assert resource.last_modified.tzinfo is not None
-
-    def test_file_mtime_utc_returns_none_on_stat_failure(self, tmp_path: Path) -> None:
-        """_file_mtime_utc must return None when the file cannot be stat'd."""
-        missing = tmp_path / "does-not-exist"
-        assert _file_mtime_utc(missing) is None

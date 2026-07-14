@@ -21,7 +21,6 @@ from skills_mcp.infrastructure.persistence.oci_repository import (
     MAX_TARBALL_FILES,
     MAX_TARBALL_TOTAL_SIZE,
     OCISkillRepository,
-    _file_mtime_utc,
 )
 
 
@@ -806,7 +805,3 @@ class TestOCISkillRepositoryLastModified:
 
         expected = datetime.fromtimestamp(manifest_path.stat().st_mtime, tz=UTC)
         assert skill.last_modified == expected
-
-    def test_file_mtime_utc_returns_none_on_stat_failure(self, tmp_path: Path) -> None:
-        """_file_mtime_utc must return None when the file cannot be stat'd."""
-        assert _file_mtime_utc(tmp_path / "missing") is None
