@@ -10,6 +10,19 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Skill validation tool
 - Session-based state tracking for expanded skills
 - Local filesystem skill repository with caching
+- SEP-2640 resource annotations on every listed resource: `audience`
+  (`["assistant"]`), `priority` (0.8 skill-level, 0.3 sub-resources), and an
+  ISO 8601 `lastModified` derived from file mtime (omitted when unknown).
+- `last_modified` on the `Skill` and `SkillResource` domain models, populated
+  from file mtime by the local and OCI repositories.
+- Experimental capability declaration on `initialize`:
+  `experimental["io.modelcontextprotocol/skills"]`, advertised via a
+  `Server` subclass that also corrects `resources.listChanged` to `true`.
+- `validate_skill` is now reachable: allow-list its directories with the
+  repeatable `--validation-path` CLI flag or the `server.validation_paths`
+  config option (CLI takes precedence).
+- Tests pinning the SEP-2640 bare-URI read guarantee (a resource can be read
+  by URI with no prior listing or expansion).
 
 ### Changed
 
@@ -40,6 +53,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Session-ID resolution now fails closed: requests without an MCP session ID
   are treated as sessionless rather than sharing a single `"default"` session,
   preventing expanded-skill state from bleeding across unrelated requests.
+- `resources.listChanged` is now advertised as `true` to match actual
+  behavior; the server emits `resources/list_changed` notifications on first
+  expansion but previously advertised the capability as `false`.
 
 ## [0.1.0] - TBD
 

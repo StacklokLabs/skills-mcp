@@ -208,10 +208,18 @@ Server declares these capabilities:
   "capabilities": {
     "resources": {
       "listChanged": true
+    },
+    "experimental": {
+      "io.modelcontextprotocol/skills": {}
     }
   }
 }
 ```
+
+`resources.listChanged` is `true` because the server emits a
+`resources/list_changed` notification the first time a skill is expanded in a
+session. The `experimental` map declares the SEP-2640 skills extension (see
+[SEP-2640 Alignment](#sep-2640-alignment)).
 
 ## Security Considerations
 
@@ -230,6 +238,32 @@ SKILLS_MCP_HOST="127.0.0.1"                        # Default host
 SKILLS_MCP_PORT="8080"                             # Default port
 SKILLS_MCP_LOG_LEVEL="WARNING"                     # Log level
 ```
+
+## SEP-2640 Alignment
+
+[SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol) proposes
+a first-class skills extension for MCP. This server tracks the parts of that
+proposal that have reached stable consensus and defers the parts still churning
+upstream.
+
+**Adopted now:**
+
+- **Resource annotations** — every listed resource carries `audience`
+  (`["assistant"]`), `priority` (`0.8` for skill-level resources, `0.3` for
+  on-demand sub-resources), and, when known, an ISO 8601 `lastModified`
+  timestamp derived from file mtime.
+- **Bare-URI reads** — a resource can be read directly by URI without a prior
+  `resources/list` or skill expansion, so a client holding a known URI is never
+  gated on discovery.
+- **Experimental capability declaration** — the server advertises
+  `experimental["io.modelcontextprotocol/skills"]` on `initialize`.
+
+**Deliberately deferred** (pending upstream stabilization):
+
+- The dedicated `skill://` URI scheme (this server keeps its `skills://` scheme).
+- Index / discovery (`index.json`, skills-list) mechanisms.
+- Content digests on resources — their consumer is the deferred discovery layer.
+- Directory (collection) reads.
 
 ## References
 

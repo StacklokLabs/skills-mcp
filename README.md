@@ -57,6 +57,10 @@ The same skills are exposed through three complementary MCP surfaces, so a clien
 
 The server also ships MCP **instructions** that point clients at the `list_skills` → `get_skill` → `get_skill_resource` workflow.
 
+### SEP-2640 alignment
+
+The server adopts the stable parts of the [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol) skills extension: resource annotations (`audience`, `priority`, and an ISO 8601 `lastModified`), a bare-URI read guarantee (a known resource URI can be read without a prior `resources/list` or expansion), and an experimental capability declaration (`experimental["io.modelcontextprotocol/skills"]`) on `initialize`. Still-churning parts — the `skill://` URI scheme, index/discovery, content digests, and directory reads — are deliberately deferred. See the [architecture doc](docs/architecture/mcp-server-design.md#sep-2640-alignment) for details.
+
 ## Quick Start
 
 ```bash

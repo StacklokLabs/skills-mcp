@@ -37,6 +37,15 @@ uv run skills-mcp
 
 See [Architecture](architecture/mcp-server-design.md) for design details.
 
+## SEP-2640 Alignment
+
+The server tracks the stable parts of the SEP-2640 skills extension: resource
+annotations (`audience`, `priority`, `lastModified`), a bare-URI read guarantee,
+and an experimental capability declaration on `initialize`. Still-churning parts
+(the `skill://` scheme, index/discovery, content digests, directory reads) are
+deliberately deferred. See
+[SEP-2640 Alignment](architecture/mcp-server-design.md#sep-2640-alignment).
+
 ## Links
 
 - [Agent Skills Spec](https://agentskills.io/specification)
