@@ -11,6 +11,7 @@ import logging
 import shutil
 import tarfile
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,6 +43,27 @@ MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024
 # Security limits for tarball extraction
 MAX_TARBALL_FILES = 1000  # Maximum files per skill
 MAX_TARBALL_TOTAL_SIZE = 100 * 1024 * 1024  # 100 MB total extracted size
+
+
+def _file_mtime_utc(path: Path) -> datetime | None:
+    """Return a file's last-modified time as a UTC datetime, or None.
+
+    OCI artifacts are extracted from tarballs (``tar.extractall``) or copied
+    with ``copytree``/``copy2``, both of which preserve the archived mtimes, so
+    the extracted mtime is a meaningful last-modified signal. A stat failure
+    yields ``None`` so the caller omits the ``lastModified`` annotation.
+
+    Args:
+        path: Path to stat.
+
+    Returns:
+        The file's mtime as an aware UTC datetime, or ``None`` on stat failure.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(mtime, tz=UTC)
 
 
 class OCISkillRepository:
@@ -394,6 +416,8 @@ class OCISkillRepository:
             references=references,
             assets=assets,
             token_count=token_count,
+            # sync local-fs by design
+            last_modified=_file_mtime_utc(manifest_path),
         )
 
     async def _discover_resources(
@@ -434,7 +458,11 @@ class OCISkillRepository:
                 content = item.read_bytes()
                 token_count = self._token_estimator.estimate_file(content)
 
-                resource = SkillResource.from_path(resolved_path, token_count)
+                resource = SkillResource.from_path(
+                    resolved_path,
+                    token_count,
+                    last_modified=_file_mtime_utc(resolved_path),
+                )
                 resources.append(resource)
             except OSError as e:
                 logger.warning("Failed to read resource %s: %s", item, e)

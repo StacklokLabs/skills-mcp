@@ -2,6 +2,7 @@
 
 import io
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,7 @@ from skills_mcp.infrastructure.persistence.oci_repository import (
     MAX_TARBALL_FILES,
     MAX_TARBALL_TOTAL_SIZE,
     OCISkillRepository,
+    _file_mtime_utc,
 )
 
 
@@ -761,3 +763,50 @@ class TestDiscoverResources:
         resources = await repo._discover_resources(skill_dir / "nonexistent", skill_dir)
 
         assert resources == []
+
+
+class TestOCISkillRepositoryLastModified:
+    """Tests for the SEP-2640 last_modified population from extracted mtime."""
+
+    async def test_load_skill_from_dir_populates_last_modified(
+        self, repo: OCISkillRepository, tmp_path: Path
+    ) -> None:
+        """A skill loaded from an extracted dir carries file mtimes.
+
+        OCI artifacts are extracted with tar.extractall / copytree, which
+        preserve archived mtimes, so the extracted mtime is meaningful.
+        """
+        skill_dir = tmp_path / "skill"
+        (skill_dir / "scripts").mkdir(parents=True)
+        manifest_path = skill_dir / "SKILL.md"
+        manifest_path.write_text(
+            "---\nname: oci-skill\ndescription: An OCI test skill\n---\n\n# OCI\n"
+        )
+        (skill_dir / "scripts" / "run.py").write_text("print('hi')\n")
+
+        skill = await repo._load_skill_from_dir(skill_dir, manifest_path)
+
+        assert skill.last_modified is not None
+        assert skill.last_modified.tzinfo is not None
+        assert skill.scripts
+        assert skill.scripts[0].last_modified is not None
+
+    async def test_load_skill_from_dir_last_modified_matches_manifest_mtime(
+        self, repo: OCISkillRepository, tmp_path: Path
+    ) -> None:
+        """The skill last_modified must equal the SKILL.md mtime in UTC."""
+        skill_dir = tmp_path / "skill"
+        skill_dir.mkdir()
+        manifest_path = skill_dir / "SKILL.md"
+        manifest_path.write_text(
+            "---\nname: oci-skill\ndescription: An OCI test skill\n---\n\n# OCI\n"
+        )
+
+        skill = await repo._load_skill_from_dir(skill_dir, manifest_path)
+
+        expected = datetime.fromtimestamp(manifest_path.stat().st_mtime, tz=UTC)
+        assert skill.last_modified == expected
+
+    def test_file_mtime_utc_returns_none_on_stat_failure(self, tmp_path: Path) -> None:
+        """_file_mtime_utc must return None when the file cannot be stat'd."""
+        assert _file_mtime_utc(tmp_path / "missing") is None

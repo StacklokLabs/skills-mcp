@@ -15,6 +15,7 @@ from skills_mcp.domain.models.resource import ResourceType
 
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
     from skills_mcp.domain.models.manifest import SkillManifest
@@ -45,6 +46,9 @@ class Skill:
         references: List of reference resources.
         assets: List of asset resources.
         token_count: Estimated token count for the body.
+        last_modified: Last-modified timestamp of the skill's SKILL.md (UTC),
+            or ``None`` if it could not be determined. Surfaced as the SEP-2640
+            ``lastModified`` annotation on the listed skill resource.
     """
 
     manifest: SkillManifest
@@ -54,6 +58,7 @@ class Skill:
     references: list[SkillResource] = field(default_factory=list)
     assets: list[SkillResource] = field(default_factory=list)
     token_count: int = 0
+    last_modified: datetime | None = None
 
     @property
     def name(self) -> SkillName:

@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +14,7 @@ from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.infrastructure.persistence.local_repository import (
     MAX_RESOURCE_SIZE_BYTES,
     LocalSkillRepository,
+    _file_mtime_utc,
 )
 
 
@@ -381,3 +383,37 @@ class TestLocalSkillRepositoryConcurrency:
         for result in results[1:]:
             names = {s.name.value for s in result}
             assert names == first_names
+
+
+class TestLocalSkillRepositoryLastModified:
+    """Tests for the SEP-2640 last_modified population from file mtime."""
+
+    async def test_skill_last_modified_populated_and_plausible(self) -> None:
+        """A loaded skill should carry a plausible aware-UTC last_modified."""
+        repo = LocalSkillRepository([FIXTURES_PATH])
+        skill = await repo.find_by_name(SkillName("valid-skill"))
+
+        assert skill is not None
+        assert skill.last_modified is not None
+        # Must be timezone-aware and UTC (ISO 8601 with offset when serialized).
+        assert skill.last_modified.tzinfo is not None
+        assert skill.last_modified.utcoffset() == UTC.utcoffset(None)
+        # Must match the SKILL.md file's actual mtime.
+        manifest_mtime = (FIXTURES_PATH / "valid-skill" / "SKILL.md").stat().st_mtime
+        assert skill.last_modified == datetime.fromtimestamp(manifest_mtime, tz=UTC)
+
+    async def test_resource_last_modified_populated(self) -> None:
+        """Discovered resources should carry their own file mtime."""
+        repo = LocalSkillRepository([FIXTURES_PATH])
+        skill = await repo.find_by_name(SkillName("valid-skill"))
+
+        assert skill is not None
+        assert skill.scripts
+        for resource in skill.scripts:
+            assert resource.last_modified is not None
+            assert resource.last_modified.tzinfo is not None
+
+    def test_file_mtime_utc_returns_none_on_stat_failure(self, tmp_path: Path) -> None:
+        """_file_mtime_utc must return None when the file cannot be stat'd."""
+        missing = tmp_path / "does-not-exist"
+        assert _file_mtime_utc(missing) is None

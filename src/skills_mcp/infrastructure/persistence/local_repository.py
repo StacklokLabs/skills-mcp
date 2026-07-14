@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from pathlib import Path  # noqa: TC003 - used at runtime
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,25 @@ SKILL_MANIFEST_FILENAME = "SKILL.md"
 
 # Maximum resource size (10 MB) to prevent memory exhaustion
 MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024
+
+
+def _file_mtime_utc(path: Path) -> datetime | None:
+    """Return a file's last-modified time as a UTC datetime, or None.
+
+    A stat failure (missing file, permission error) yields ``None`` so the
+    caller can simply omit the ``lastModified`` annotation rather than fail.
+
+    Args:
+        path: Path to stat.
+
+    Returns:
+        The file's mtime as an aware UTC datetime, or ``None`` on stat failure.
+    """
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(mtime, tz=UTC)
 
 
 class LocalSkillRepository:
@@ -231,6 +251,8 @@ class LocalSkillRepository:
             references=references,
             assets=assets,
             token_count=token_count,
+            # sync local-fs by design
+            last_modified=_file_mtime_utc(manifest_path),
         )
 
     async def _discover_resources(
@@ -271,7 +293,11 @@ class LocalSkillRepository:
                 content = item.read_bytes()
                 token_count = self._token_estimator.estimate_file(content)
 
-                resource = SkillResource.from_path(resolved_path, token_count)
+                resource = SkillResource.from_path(
+                    resolved_path,
+                    token_count,
+                    last_modified=_file_mtime_utc(resolved_path),
+                )
                 resources.append(resource)
             except Exception:
                 logger.exception("Failed to load resource: %s", item)

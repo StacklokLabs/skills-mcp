@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from pathlib import Path
 
 
@@ -57,20 +58,30 @@ class SkillResource:
         path: The full path to the resource file.
         resource_type: The type of resource (script, reference, asset).
         token_count: Estimated token count for the resource content.
+        last_modified: Last-modified timestamp of the resource file (UTC), or
+            ``None`` if it could not be determined. Surfaced as the SEP-2640
+            ``lastModified`` annotation on listed resources.
     """
 
     name: str
     path: Path
     resource_type: ResourceType
     token_count: int
+    last_modified: datetime | None = None
 
     @classmethod
-    def from_path(cls, path: Path, token_count: int) -> SkillResource:
+    def from_path(
+        cls,
+        path: Path,
+        token_count: int,
+        last_modified: datetime | None = None,
+    ) -> SkillResource:
         """Create a SkillResource from a file path.
 
         Args:
             path: Path to the resource file.
             token_count: Estimated token count for the content.
+            last_modified: Optional last-modified timestamp (UTC) for the file.
 
         Returns:
             A SkillResource instance.
@@ -90,6 +101,7 @@ class SkillResource:
             path=path,
             resource_type=resource_type,
             token_count=token_count,
+            last_modified=last_modified,
         )
 
     @property
