@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, closing
@@ -136,11 +137,15 @@ async def e2e_server() -> AsyncIterator[ServerInfo]:
         "SKILLS_MCP_PATHS": str(FIXTURES_PATH),
     }
 
+    # Server output goes to an unnamed temp file, NOT subprocess.PIPE: nothing
+    # drains the pipes during the run, so a chatty server would fill the OS
+    # pipe buffer and deadlock mid-log-write while the client awaits forever.
+    log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     process = subprocess.Popen(  # noqa: ASYNC220, S603
         [sys.executable, "-m", "skills_mcp", "--host", host, "--port", str(port)],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
         text=True,
     )
 
@@ -157,6 +162,7 @@ async def e2e_server() -> AsyncIterator[ServerInfo]:
     finally:
         # Graceful shutdown
         await shutdown_server(server_info)
+        log_file.close()
 
 
 # Type alias for the client factory
@@ -263,11 +269,15 @@ def e2e_server_module() -> Iterator[ServerInfo]:
         "SKILLS_MCP_PATHS": str(FIXTURES_PATH),
     }
 
+    # See e2e_server: output must go to a temp file, not an undrained PIPE.
+    # This matters even more here — the module-scoped server accumulates a
+    # whole module's worth of log output and WILL fill the pipe buffer.
+    log_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     process = subprocess.Popen(  # noqa: S603
         [sys.executable, "-m", "skills_mcp", "--host", host, "--port", str(port)],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
         text=True,
     )
 
@@ -282,6 +292,7 @@ def e2e_server_module() -> Iterator[ServerInfo]:
         yield server_info
     finally:
         shutdown_server_sync(server_info)
+        log_file.close()
 
 
 @pytest.fixture
