@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -607,3 +609,101 @@ class TestRefresh:
         repo._skills_cache = {"x": MagicMock()}
         await repo.refresh()
         assert repo._skills_cache is None
+
+
+class TestCloneTimeout:
+    async def test_timeout_skips_reference_without_poisoning_cache(
+        self, cache_dir: Path
+    ) -> None:
+        """A clone exceeding clone_timeout is skipped; no partial sha_dir.
+
+        The orphaned clone thread (which outlives asyncio.wait_for) is held
+        blocked while we assert, proving the timed-out attempt neither
+        produces a reference nor leaves a completed/partial snapshot behind.
+        """
+        ref = GitSkillReference.from_string("git://example.com/org/repo@main")
+        repo = _repo(cache_dir, ref, allow_private_hosts=True)
+        repo._config.clone_timeout = 0.2  # tighten the wait_for bound (float ok)
+        sha = _sha("a")
+
+        def ls_remote(_url: str, **_kw: object) -> MagicMock:
+            result = MagicMock()
+            result.refs = {b"refs/heads/main": sha.encode()}
+            return result
+
+        release = threading.Event()
+
+        def slow_clone(_url: str, **kwargs: object) -> MagicMock:
+            # Block past the timeout; released only after our assertions.
+            release.wait(timeout=5)
+            target = Path(str(kwargs["target"]))
+            demo = target / "skills" / "x"
+            demo.mkdir(parents=True, exist_ok=True)
+            (demo / "SKILL.md").write_text(_skill_md("x"))
+            return MagicMock()
+
+        try:
+            with (
+                patch(
+                    "skills_mcp.infrastructure.persistence.git_repository.porcelain.ls_remote",
+                    side_effect=ls_remote,
+                ),
+                patch(
+                    "skills_mcp.infrastructure.persistence.git_repository.porcelain.clone",
+                    side_effect=slow_clone,
+                ),
+            ):
+                skills = await repo.list_all()
+
+            assert skills == []
+            sha_dir = repo._sha_dir(ref, sha)
+            # Atomic replace happens only after a full clone, so the snapshot
+            # is never complete (nor partial) at this point.
+            assert not repo._is_complete(sha_dir)
+            assert repo._read_pointer(ref) is None
+        finally:
+            release.set()  # let the orphaned worker thread unwind cleanly
+
+
+class TestConcurrentLoad:
+    async def test_two_concurrent_list_all_fetch_once(self, cache_dir: Path) -> None:
+        """QA: racing list_all() calls trigger exactly one fetch (asyncio.Lock)."""
+        ref = GitSkillReference.from_string("git://example.com/org/repo@main")
+        repo = _repo(cache_dir, ref, allow_private_hosts=True)
+        sha = _sha("b")
+
+        ls_calls = 0
+        clone_calls = 0
+
+        def ls_remote(_url: str, **_kw: object) -> MagicMock:
+            nonlocal ls_calls
+            ls_calls += 1
+            result = MagicMock()
+            result.refs = {b"refs/heads/main": sha.encode()}
+            return result
+
+        def clone(_url: str, **kwargs: object) -> MagicMock:
+            nonlocal clone_calls
+            clone_calls += 1
+            target = Path(str(kwargs["target"]))
+            demo = target / "skills" / "x"
+            demo.mkdir(parents=True, exist_ok=True)
+            (demo / "SKILL.md").write_text(_skill_md("x"))
+            return MagicMock()
+
+        with (
+            patch(
+                "skills_mcp.infrastructure.persistence.git_repository.porcelain.ls_remote",
+                side_effect=ls_remote,
+            ),
+            patch(
+                "skills_mcp.infrastructure.persistence.git_repository.porcelain.clone",
+                side_effect=clone,
+            ),
+        ):
+            first, second = await asyncio.gather(repo.list_all(), repo.list_all())
+
+        assert ls_calls == 1
+        assert clone_calls == 1
+        assert {s.name.value for s in first} == {"x"}
+        assert {s.name.value for s in second} == {"x"}

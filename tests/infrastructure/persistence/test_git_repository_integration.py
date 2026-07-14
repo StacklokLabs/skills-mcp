@@ -77,6 +77,36 @@ def _local_ref(root: Path, sha: str) -> GitSkillReference:
     )
 
 
+def _default_branch(root: Path) -> str:
+    return porcelain.active_branch(str(root)).decode("ascii")
+
+
+def _named_ref(root: Path, ref: str) -> GitSkillReference:
+    return GitSkillReference(
+        host="localhost",
+        owner="t",
+        repo="t",
+        ref=ref,
+        url_override=str(root),
+    )
+
+
+def _commit_new_description(root: Path, description: str) -> str:
+    """Rewrite the demo skill's description and commit; return the new SHA."""
+    manifest = root / "skills" / "demo" / "SKILL.md"
+    manifest.write_text(
+        SKILL_MD.replace("A demo skill built by the integration fixture", description)
+    )
+    porcelain.add(str(root), paths=[str(manifest)])
+    sha = porcelain.commit(
+        str(root),
+        message=b"update demo",
+        author=b"Test <test@example.com>",
+        committer=b"Test <test@example.com>",
+    )
+    return sha.decode("ascii")
+
+
 class TestGitIntegration:
     async def test_pinned_clone_lists_skill_with_manifest(self, tmp_path: Path) -> None:
         sha = _build_local_repo(tmp_path / "src")
@@ -165,3 +195,54 @@ class TestGitIntegration:
         # A parsed reference always has url_override unset.
         parsed = GitSkillReference.from_string("git://github.com/org/repo@main")
         assert parsed.url_override is None
+
+    async def test_branch_refresh_picks_up_new_commit(self, tmp_path: Path) -> None:
+        """A branch ref re-resolves on refresh: new commit -> new snapshot."""
+        src = tmp_path / "src"
+        _build_local_repo(src)
+        ref = _named_ref(src, _default_branch(src))
+        repo = GitSkillRepository(
+            GitRepositoryConfig(skills=[ref], cache_dir=tmp_path / "cache")
+        )
+
+        skills = await repo.list_all()
+        assert len(skills) == 1
+        assert skills[0].manifest.description.startswith("A demo skill")
+        sha1 = repo._read_pointer(ref)
+        assert sha1 is not None
+
+        # Commit a new revision to the source branch.
+        _commit_new_description(src, "Updated demo skill")
+
+        await repo.refresh()
+        skills = await repo.list_all()
+        assert len(skills) == 1
+        assert skills[0].manifest.description == "Updated demo skill"
+
+        sha2 = repo._read_pointer(ref)
+        assert sha2 is not None
+        assert sha2 != sha1
+        # A fresh snapshot dir was created for the new SHA (old one persists).
+        assert repo._is_complete(repo._sha_dir(ref, sha2))
+        assert repo._is_complete(repo._sha_dir(ref, sha1))
+
+    async def test_named_branch_and_tag_resolution(self, tmp_path: Path) -> None:
+        """ls_remote resolution works for a named branch and a tag."""
+        src = tmp_path / "src"
+        _build_local_repo(src)
+        branch = _default_branch(src)
+        porcelain.tag_create(str(src), tag=b"v2.0")
+
+        branch_repo = GitSkillRepository(
+            GitRepositoryConfig(
+                skills=[_named_ref(src, branch)], cache_dir=tmp_path / "cache-branch"
+            )
+        )
+        assert {s.name.value for s in await branch_repo.list_all()} == {"demo"}
+
+        tag_repo = GitSkillRepository(
+            GitRepositoryConfig(
+                skills=[_named_ref(src, "v2.0")], cache_dir=tmp_path / "cache-tag"
+            )
+        )
+        assert {s.name.value for s in await tag_repo.list_all()} == {"demo"}
