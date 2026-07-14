@@ -5,6 +5,9 @@ from pathlib import Path
 import pytest
 
 from skills_mcp.infrastructure.config.models import (
+    GitAuthConfig,
+    GitSkillConfig,
+    GitSourceConfig,
     LocalSourceConfig,
     OCIAuthConfig,
     OCISkillConfig,
@@ -192,6 +195,71 @@ class TestOCISourceConfig:
         assert "ghcr.io" in config.auth
 
 
+class TestGitAuthConfig:
+    """Tests for GitAuthConfig (shares _CredentialConfig with OCIAuthConfig)."""
+
+    def test_empty_auth(self) -> None:
+        """Should allow empty auth."""
+        config = GitAuthConfig()
+        assert config.username is None
+        assert config.password is None
+
+    def test_with_token(self) -> None:
+        """Should store a token as the password."""
+        config = GitAuthConfig(password="ghp_token")  # noqa: S106
+        assert config.get_password() == "ghp_token"
+
+    def test_get_password_from_file(self, tmp_path: Path) -> None:
+        """Should read the token from a file (Docker secrets pattern)."""
+        cred_file = tmp_path / "token"
+        cred_file.write_text("file-token\n")
+
+        config = GitAuthConfig(password_file=cred_file)
+        assert config.get_password() == "file-token"
+
+
+class TestGitSkillConfig:
+    """Tests for GitSkillConfig."""
+
+    def test_requires_repo(self) -> None:
+        """Should require the repo field."""
+        config = GitSkillConfig(repo="git://github.com/org/skill@v1")
+        assert config.repo == "git://github.com/org/skill@v1"
+
+
+class TestGitSourceConfig:
+    """Tests for GitSourceConfig."""
+
+    def test_defaults(self) -> None:
+        """Should have sensible defaults."""
+        config = GitSourceConfig()
+
+        assert config.cache_dir is None
+        assert config.skills == []
+        assert config.auth == {}
+        assert config.allow_private_hosts is False
+        assert config.clone_timeout == 120
+
+    def test_expands_cache_dir(self) -> None:
+        """Should expand ~ in cache_dir."""
+        config = GitSourceConfig(cache_dir="~/.cache/git")
+        assert config.cache_dir == Path.home() / ".cache" / "git"
+
+    def test_clone_timeout_validation(self) -> None:
+        """Should reject a clone_timeout below 1."""
+        with pytest.raises(ValueError):
+            GitSourceConfig(clone_timeout=0)
+
+    def test_with_skills_and_auth(self) -> None:
+        """Should accept skills and per-host auth."""
+        config = GitSourceConfig(
+            skills=[GitSkillConfig(repo="git://github.com/org/skill@v1")],
+            auth={"github.com": GitAuthConfig(password="tok")},  # noqa: S106
+        )
+        assert len(config.skills) == 1
+        assert "github.com" in config.auth
+
+
 class TestSkillsConfig:
     """Tests for SkillsConfig."""
 
@@ -202,6 +270,7 @@ class TestSkillsConfig:
         assert config.version == "1"
         assert config.local is None
         assert config.oci is None
+        assert config.git is None
 
     def test_has_local_sources_empty(self) -> None:
         """Should return False when no local sources."""
@@ -249,5 +318,33 @@ class TestSkillsConfig:
         """Should return False when OCI sources configured."""
         config = SkillsConfig(
             oci=OCISourceConfig(skills=[OCISkillConfig(image="ghcr.io/org/skill:v1")])
+        )
+        assert config.is_empty() is False
+
+    def test_has_git_sources_empty(self) -> None:
+        """Should return False when no Git sources."""
+        config = SkillsConfig()
+        assert config.has_git_sources() is False
+
+    def test_has_git_sources_with_skills(self) -> None:
+        """Should return True when Git skills configured."""
+        config = SkillsConfig(
+            git=GitSourceConfig(
+                skills=[GitSkillConfig(repo="git://github.com/org/skill@v1")]
+            )
+        )
+        assert config.has_git_sources() is True
+
+    def test_has_git_sources_empty_skills(self) -> None:
+        """Should return False when Git config but no skills."""
+        config = SkillsConfig(git=GitSourceConfig(skills=[]))
+        assert config.has_git_sources() is False
+
+    def test_is_empty_with_git(self) -> None:
+        """Should return False when Git sources configured."""
+        config = SkillsConfig(
+            git=GitSourceConfig(
+                skills=[GitSkillConfig(repo="git://github.com/org/skill@v1")]
+            )
         )
         assert config.is_empty() is False

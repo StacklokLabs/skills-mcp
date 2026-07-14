@@ -28,11 +28,13 @@ class LocalSourceConfig(BaseModel):
         return [Path(p).expanduser() for p in v]
 
 
-class OCIAuthConfig(BaseModel):
-    """Authentication configuration for an OCI registry.
+class _CredentialConfig(BaseModel):
+    """Base authentication configuration for a remote source.
 
-    Supports both direct values and file references (for Docker secrets pattern).
-    File references take precedence over direct values if both are specified.
+    Supports both direct values and file references (for the Docker secrets
+    pattern). File references take precedence over direct values if both are
+    specified. Shared by :class:`OCIAuthConfig` (OCI registries) and
+    :class:`GitAuthConfig` (Git hosts).
 
     Attributes:
         username: Username for authentication (optional).
@@ -79,6 +81,24 @@ class OCIAuthConfig(BaseModel):
             raise ValueError(f"{field_name}: error reading {path}: {e}") from e
 
 
+class OCIAuthConfig(_CredentialConfig):
+    """Authentication configuration for an OCI registry.
+
+    Direct values or file references (Docker secrets pattern); see
+    :class:`_CredentialConfig`.
+    """
+
+
+class GitAuthConfig(_CredentialConfig):
+    """Authentication configuration for a Git host.
+
+    Direct values or file references (Docker secrets pattern); see
+    :class:`_CredentialConfig`. Git access is HTTPS-with-token only: the
+    password field carries the token (e.g. a PAT) and the username defaults to
+    ``x-access-token`` when omitted.
+    """
+
+
 class OCISkillConfig(BaseModel):
     """Configuration for a single OCI skill reference.
 
@@ -105,6 +125,46 @@ class OCISourceConfig(BaseModel):
     verify_tls: bool = True
     skills: list[OCISkillConfig] = Field(default_factory=list)
     auth: dict[str, OCIAuthConfig] = Field(default_factory=dict)
+
+    @field_validator("cache_dir", mode="before")
+    @classmethod
+    def expand_cache_dir(cls, v: str | Path | None) -> Path | None:
+        """Expand ~ in cache directory path."""
+        if v is None:
+            return None
+        return Path(v).expanduser()
+
+
+class GitSkillConfig(BaseModel):
+    """Configuration for a single Git skill reference.
+
+    Attributes:
+        repo: Git reference string in ToolHive notation
+            (``git://host/owner/repo[@ref][#subdir]``). Always fetched over
+            HTTPS; ``git://`` is notation, not the git daemon protocol.
+    """
+
+    repo: str
+
+
+class GitSourceConfig(BaseModel):
+    """Configuration for Git repository skill sources.
+
+    Attributes:
+        cache_dir: Local cache directory for cloned snapshots.
+        skills: List of Git skill references to fetch.
+        auth: Per-host authentication configuration.
+        allow_private_hosts: Bypass the pre-clone check that rejects hosts
+            resolving only to private/loopback/link-local addresses. Off by
+            default to guard against SSRF.
+        clone_timeout: Per-repository clone/resolve timeout in seconds.
+    """
+
+    cache_dir: Path | None = None
+    skills: list[GitSkillConfig] = Field(default_factory=list)
+    auth: dict[str, GitAuthConfig] = Field(default_factory=dict)
+    allow_private_hosts: bool = False
+    clone_timeout: Annotated[int, Field(ge=1)] = 120
 
     @field_validator("cache_dir", mode="before")
     @classmethod
@@ -165,6 +225,7 @@ class SkillsConfig(BaseModel):
         version: Configuration schema version.
         local: Configuration for local filesystem sources.
         oci: Configuration for OCI registry sources.
+        git: Configuration for Git repository sources.
         server: Server configuration (host, port, log level).
 
     Example:
@@ -186,6 +247,15 @@ class SkillsConfig(BaseModel):
               username: ${GITHUB_USER}
               password: ${GITHUB_TOKEN}
 
+        git:
+          cache_dir: ~/.cache/skills-mcp/git
+          skills:
+            - repo: git://github.com/stacklok/skills@v1.0.0
+            - repo: git://github.com/stacklok/skills@main#analysis
+          auth:
+            github.com:
+              password: ${GITHUB_TOKEN}
+
         server:
           host: 0.0.0.0
           port: 8080
@@ -196,6 +266,7 @@ class SkillsConfig(BaseModel):
     version: str = "1"
     local: LocalSourceConfig | None = None
     oci: OCISourceConfig | None = None
+    git: GitSourceConfig | None = None
     server: ServerConfig = Field(default_factory=ServerConfig)
 
     def has_local_sources(self) -> bool:
@@ -206,6 +277,14 @@ class SkillsConfig(BaseModel):
         """Check if OCI sources are configured."""
         return self.oci is not None and len(self.oci.skills) > 0
 
+    def has_git_sources(self) -> bool:
+        """Check if Git sources are configured."""
+        return self.git is not None and len(self.git.skills) > 0
+
     def is_empty(self) -> bool:
         """Check if no sources are configured."""
-        return not self.has_local_sources() and not self.has_oci_sources()
+        return not (
+            self.has_local_sources()
+            or self.has_oci_sources()
+            or self.has_git_sources()
+        )

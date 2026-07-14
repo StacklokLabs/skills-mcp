@@ -97,6 +97,39 @@ oci:
 
         assert config.oci.skills[0].image == "ghcr.io/myorg/skill:v2.0"
 
+    def test_minimal_git_config(self) -> None:
+        """Should parse a minimal git config."""
+        yaml_content = """
+version: "1"
+git:
+  skills:
+    - repo: git://github.com/org/skill@v1.0.0
+"""
+        config = load_config(yaml_content)
+
+        assert config.git is not None
+        assert config.has_git_sources()
+        assert not config.is_empty()
+        assert len(config.git.skills) == 1
+        assert config.git.skills[0].repo == "git://github.com/org/skill@v1.0.0"
+
+    def test_git_auth_env_var_expansion(self) -> None:
+        """Should expand ${GITHUB_TOKEN} into git.auth (existing expansion)."""
+        yaml_content = """
+version: "1"
+git:
+  skills:
+    - repo: git://github.com/org/skill@main
+  auth:
+    github.com:
+      password: ${GITHUB_TOKEN}
+"""
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "ghp_secret"}):
+            config = load_config(yaml_content)
+
+        assert config.git is not None
+        assert config.git.auth["github.com"].get_password() == "ghp_secret"
+
     def test_env_var_with_default(self) -> None:
         """Should use default when env var not set."""
         yaml_content = """
