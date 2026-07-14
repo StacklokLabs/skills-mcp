@@ -34,3 +34,24 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Load a single-platform image into the local daemon (cheap: reuses the
+      # cache from the multi-platform build) so the smoke test can run it.
+      - name: Build (load for smoke test)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: skills-mcp:smoke
+          cache-from: type=gha
+
+      # A green build alone proved nothing about the runtime: the image once
+      # shipped with a venv the runtime interpreter never saw (broken
+      # bin/python symlinks, Python version drift). Import + --help exercise
+      # the interpreter/venv wiring end to end.
+      - name: Smoke test image
+        run: |
+          docker run --rm --entrypoint python skills-mcp:smoke -c "import skills_mcp; print('import ok')"
+          docker run --rm --entrypoint python skills-mcp:smoke -m skills_mcp --help > /dev/null
+          echo "smoke test passed"
