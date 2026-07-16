@@ -1,6 +1,6 @@
 # Connect your client
 
-The server speaks MCP over Streamable HTTP at `http://<host>:<port>/mcp` (by default `http://localhost:8080/mcp`). Any MCP client that supports Streamable HTTP can connect. This page covers the clients the server is tested or designed against; for how each surface behaves once connected, see the [MCP surface reference](../reference/mcp-surface.md).
+The server speaks MCP over Streamable HTTP at `http://<host>:<port>/mcp` (by default `http://localhost:8080/mcp`). If you don't have a server running yet, the [quickstart](quickstart.md) gets you one; host, port, and skill sources are covered in the [configuration reference](../reference/configuration.md). Any MCP client that supports Streamable HTTP can connect. This page covers the clients the server is tested or designed against; for how each surface behaves once connected, see the [MCP surface reference](../reference/mcp-surface.md).
 
 ## Claude Code
 

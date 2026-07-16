@@ -37,7 +37,7 @@ See [skill sources](docs/guides/skill-sources.md) for walkthroughs and the [conf
 
 ## Documentation
 
-Full documentation lives at [stacklok.github.io/skills-mcp](https://stacklok.github.io/skills-mcp):
+Full documentation lives at [stacklok.github.io/skills-mcp](https://stacklok.github.io/skills-mcp) (source under [docs/](docs/index.md)):
 
 - [Quickstart](docs/getting-started/quickstart.md) and [client setup](docs/getting-started/clients.md)
 - [Configuration reference](docs/reference/configuration.md)

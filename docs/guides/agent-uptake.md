@@ -37,3 +37,5 @@ Each skill is also an MCP prompt, so interactive Claude Code exposes `/mcp__<ser
 - **Claude Code needs nothing extra.** The `list_skills` tool carries the `anthropic/alwaysLoad` flag, so its description (with the embedded catalog and trigger text) is in context from the first turn. Natural prompts matching a fully-listed skill work with zero client-side configuration.
 - **No overhead on unrelated prompts.** Under-triggering is the failure mode, not over-triggering: prompts that match no skill produce no skill lookups.
 - **Other clients differ.** `anthropic/alwaysLoad` is a Claude Code extension; clients without tool search load all descriptions anyway, and the flag is inert for them. Only Claude Code has been measured; see the [findings](../explanation/agent-discovery.md#findings-appendix-claude-code-july-2026).
+
+The exact tool contracts, annotations, and instructions text these behaviors ride on are documented in the [MCP surface reference](../reference/mcp-surface.md).

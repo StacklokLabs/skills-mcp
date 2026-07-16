@@ -19,6 +19,7 @@ Connect any Streamable HTTP MCP client to `http://localhost:8080/mcp`. That's it
 - **Want to validate skill directories over MCP?** See [enabling skill validation](guides/validation.md).
 - **Looking up a config key, env var, or tool contract?** See the [configuration reference](reference/configuration.md) and the [MCP surface reference](reference/mcp-surface.md).
 - **Curious how it works inside?** Read the [architecture](explanation/architecture.md) and [how agents discover served skills](explanation/agent-discovery.md).
+- **What changed recently?** See the [changelog](changelog.md).
 
 ## Links
 

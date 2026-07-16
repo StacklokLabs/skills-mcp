@@ -172,3 +172,9 @@ This is useful for:
 | `password_file` | Path to file containing password/token (whitespace trimmed) |
 
 File-based credentials work the same way for git host auth. If both direct values (`username`/`password`) and file references are specified, file references take precedence.
+
+## Next steps
+
+- [Configuration reference](../reference/configuration.md): every key on the source blocks above, with defaults and constraints.
+- [Enabling skill validation](validation.md): let skill authors validate directories over MCP once sources are serving.
+- [MCP surface reference](../reference/mcp-surface.md): how the served skills appear to clients (tools, resources, prompts).
