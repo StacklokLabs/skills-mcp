@@ -16,6 +16,7 @@ from skills_mcp.domain.models.skill import Skill
 from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.infrastructure.mcp.server import (
+    CATALOG_DESCRIPTION_MAX_SKILLS,
     SKILL_URI_SCHEME,
     SkillsMCPServer,
 )
@@ -452,6 +453,99 @@ class TestSkillsMCPServerListTools:
         list_skills = next(t for t in tools if t.name == "list_skills")
 
         assert "- (no skills currently loaded)" in list_skills.description
+
+    async def test_list_tools_catalog_overflow_lists_past_cap_skills_by_name(
+        self,
+    ) -> None:
+        """Skills past the cap must still appear by name in the overflow line.
+
+        A bare count never makes a model page past the cap; an unnamed
+        skill is undiscoverable.
+        """
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill(f"skill{i}")
+            for i in range(CATALOG_DESCRIPTION_MAX_SKILLS + 5)
+        ]
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        list_skills = next(t for t in tools if t.name == "list_skills")
+
+        assert f"- skill{CATALOG_DESCRIPTION_MAX_SKILLS - 1}:" in (
+            list_skills.description
+        )
+        # Past-cap skills lose their description line but keep their name.
+        assert f"- skill{CATALOG_DESCRIPTION_MAX_SKILLS}:" not in (
+            list_skills.description
+        )
+        assert "Also available:" in list_skills.description
+        for i in range(
+            CATALOG_DESCRIPTION_MAX_SKILLS, CATALOG_DESCRIPTION_MAX_SKILLS + 5
+        ):
+            assert f"skill{i}" in list_skills.description
+
+    async def test_list_tools_catalog_at_cap_has_no_overflow_line(self) -> None:
+        """A catalog exactly at the cap should list everything, no overflow."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill(f"skill{i}")
+            for i in range(CATALOG_DESCRIPTION_MAX_SKILLS)
+        ]
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        list_skills = next(t for t in tools if t.name == "list_skills")
+
+        assert f"- skill{CATALOG_DESCRIPTION_MAX_SKILLS - 1}:" in (
+            list_skills.description
+        )
+        assert "Also available:" not in list_skills.description
+
+    async def test_list_tools_catalog_stays_within_byte_budget(self) -> None:
+        """A huge catalog must not blow the byte budget; tail collapses to a count."""
+        repo = AsyncMock()
+        repo.list_all.return_value = [
+            create_mock_skill(f"some-quite-long-skill-name-{i:03d}") for i in range(120)
+        ]
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        list_skills = next(t for t in tools if t.name == "list_skills")
+
+        assert len(list_skills.description.encode("utf-8")) <= 2048
+        assert ", and " in list_skills.description
+        assert "more (call list_skills for details)." in list_skills.description
+
+    async def test_list_tools_list_skills_declares_always_load_meta(self) -> None:
+        """list_skills should carry the anthropic/alwaysLoad meta flag.
+
+        Clients with tool search defer descriptions; the flag keeps the
+        catalog visible at session start so unprompted uptake works.
+        """
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+        list_skills = next(t for t in tools if t.name == "list_skills")
+
+        assert list_skills.meta == {"anthropic/alwaysLoad": True}
+
+    async def test_list_tools_all_tools_declare_read_only_annotations(self) -> None:
+        """Every tool should carry read-only, idempotent annotations."""
+        repo = AsyncMock()
+        repo.list_all.return_value = []
+        server = SkillsMCPServer(repo)
+
+        tools = await server._handle_list_tools()
+
+        for tool in tools:
+            assert tool.annotations is not None, tool.name
+            assert tool.annotations.readOnlyHint is True, tool.name
+            assert tool.annotations.destructiveHint is False, tool.name
+            assert tool.annotations.idempotentHint is True, tool.name
+            assert tool.annotations.openWorldHint is False, tool.name
 
     async def test_list_tools_get_skill_schema_requires_name(self) -> None:
         """get_skill input schema should require exactly the name argument."""

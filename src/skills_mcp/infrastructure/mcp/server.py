@@ -37,6 +37,7 @@ from mcp.types import (
     Resource,
     TextContent,
     Tool,
+    ToolAnnotations,
 )
 from pydantic import AnyUrl
 from starlette.applications import Starlette
@@ -90,6 +91,34 @@ DEFAULT_SESSION_CLEANUP_INTERVAL_SECONDS: float = 3600.0
 # SEP-2640 experimental capability key advertised on initialize, declaring that
 # this server implements the skills extension.
 SKILLS_EXTENSION_CAPABILITY = "io.modelcontextprotocol/skills"
+
+# Limits for the catalog embedded in the list_skills tool description.
+# Clients such as Claude Code truncate tool descriptions at ~2KB, so the
+# catalog is built against an explicit byte budget: up to MAX_SKILLS full
+# name+description entries while they fit, then a names-only overflow line.
+# Live trials showed only FULL entries drive unprompted uptake (a name with
+# no description carries no domain cue), so catalog order decides which
+# skills can fire on their own; the names line just keeps the inventory
+# complete for a model that reads the description deliberately.
+CATALOG_DESCRIPTION_MAX_SKILLS = 10
+CATALOG_DESCRIPTION_BYTE_BUDGET = 1900
+
+# All tools on this server only read skill content; annotations let clients
+# relax permission handling and parallelize calls accordingly.
+READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+# Clients with MCP tool search (Claude Code's default) defer tool descriptions
+# out of the model's context until the model searches for them — which never
+# happens for tasks the model thinks it already knows. This meta flag exempts
+# the entry tool, so the embedded catalog and its "use even if you know how"
+# trigger stay visible at session start. Measured effect: unprompted skill
+# uptake goes from 0% to reliable when this description is in context.
+LIST_SKILLS_TOOL_META = {"anthropic/alwaysLoad": True}
 
 
 class _SkillsExtensionServer(Server):
@@ -172,13 +201,21 @@ class SkillsMCPServer:
         self._server = _SkillsExtensionServer(
             "skills-mcp",
             instructions=(
-                "This server provides Agent Skills — reusable instructions, "
-                "scripts, and resources that help you perform specific tasks.\n\n"
-                "Use the `list_skills` tool to discover available skills. "
-                "When a skill matches the current task, use `get_skill` to "
-                "load its full instructions. Use `get_skill_resource` to "
-                "load supporting files (scripts, references, assets) "
-                "referenced by the skill."
+                "These are your organization's shared Agent Skills: vetted, "
+                "reusable workflows served by this MCP server. They are "
+                "separate from any built-in or native skills your client "
+                "ships with; nothing here overlaps with those.\n\n"
+                "ALWAYS call `list_skills` first, before starting any task "
+                "that could match a shared workflow — for example writing "
+                "commit messages, release notes, changelogs, PR "
+                "descriptions, code reviews, or internal comms. Even if you "
+                "already know how to do the task, check anyway: the "
+                "organization's skill is authoritative and encodes team "
+                "conventions your defaults will miss.\n\n"
+                "Workflow: `list_skills` to discover, `get_skill` to load a "
+                "matching skill's full instructions, `get_skill_resource` "
+                "to load any scripts, references, or assets it names. "
+                "Follow the loaded skill's instructions exactly."
             ),
         )
         self._allowed_validation_paths = (
@@ -529,28 +566,78 @@ class SkillsMCPServer:
         list in the Skill tool description, so models know what's available
         without making a separate tool call.
 
+        The catalog is built against a byte budget (clients truncate tool
+        descriptions at ~2KB): full name+description entries first, then a
+        names-only overflow line, then a bare count. Live trials showed
+        only full entries drive unprompted uptake — neither a count-only
+        marker nor a bare name made a model page past the cap for a
+        matching task — so catalog order decides which skills can fire on
+        their own. The names line keeps the inventory complete for a model
+        that reads this description deliberately.
+
         Returns:
             Description string with embedded skill catalog.
         """
         skills = await self._repository.list_all()
-        lines = [
-            "List all available Agent Skills with their names and descriptions.",
+        header = [
+            "List your organization's shared Agent Skills: reusable team "
+            "workflows served by this server, separate from any built-in "
+            "skills.",
+            "",
+            "Use when: starting any task that might have a team convention "
+            "(commit messages, release notes, changelogs, PR descriptions, "
+            "code review, internal comms). Check here before using your own "
+            "approach, even if you think you know how.",
             "",
             "Currently available skills:",
         ]
-        if skills:
-            lines.extend(
-                f"- {skill.name.value}: {skill.manifest.description_short}"
-                for skill in skills
-            )
-        else:
-            lines.append("- (no skills currently loaded)")
-        lines.append("")
-        lines.append(
+        footer = [
+            "",
             "Returns the full catalog as JSON with name, description, "
-            "and resource counts for each skill."
+            "and resource counts for each skill.",
+        ]
+
+        if not skills:
+            body = ["- (no skills currently loaded)"]
+            return "\n".join(header + body + footer)
+
+        budget = CATALOG_DESCRIPTION_BYTE_BUDGET - len(
+            "\n".join(header + footer).encode("utf-8")
         )
-        return "\n".join(lines)
+
+        body = []
+        for skill in skills[:CATALOG_DESCRIPTION_MAX_SKILLS]:
+            entry = f"- {skill.name.value}: {skill.manifest.description_short}"
+            entry_size = len(entry.encode("utf-8")) + 1  # +1 for the newline
+            if body and entry_size > budget:
+                break
+            body.append(entry)
+            budget -= entry_size
+
+        rest = skills[len(body) :]
+        if rest:
+            prefix = "- Also available: "
+            suffix = " (call list_skills for details)."
+            # Slack reserved for a possible trailing ", and N more".
+            room = (
+                budget - len(prefix.encode("utf-8")) - len(suffix.encode("utf-8")) - 24
+            )
+            names: list[str] = []
+            for skill in rest:
+                name = skill.name.value
+                name_size = len(name.encode("utf-8")) + 2  # ", " separator
+                if names and name_size > room:
+                    break
+                names.append(name)
+                room -= name_size
+            line = prefix + ", ".join(names)
+            hidden = len(rest) - len(names)
+            if hidden > 0:
+                line += f", and {hidden} more"
+            line += suffix
+            body.append(line)
+
+        return "\n".join(header + body + footer)
 
     async def _handle_list_tools(self) -> list[Tool]:
         """Handle tools/list request.
@@ -574,33 +661,48 @@ class SkillsMCPServer:
                     "type": "object",
                     "properties": {},
                 },
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
+                _meta=LIST_SKILLS_TOOL_META,
             ),
             Tool(
                 name="get_skill",
                 description=(
-                    "Load a skill's full instructions by name. Call this when "
-                    "you need to follow a skill's workflow or procedures. "
-                    "Returns the complete SKILL.md body content along with "
-                    "metadata about available resources (scripts, references, "
-                    "assets) that can be loaded with get_skill_resource."
+                    "Load one shared skill's full instructions by name. Use "
+                    "when: list_skills shows a skill matching your task and "
+                    "you are about to do that task — load and follow it "
+                    "rather than improvising. Returns the complete SKILL.md "
+                    "body plus metadata and a listing of bundled resources "
+                    "(scripts, references, assets) loadable with "
+                    "get_skill_resource. Get the exact name from list_skills "
+                    "first.\n\n"
+                    'Example: get_skill(name="code-review").'
                 ),
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "name": {
                             "type": "string",
-                            "description": "The skill name (e.g., 'code-review')",
+                            "description": (
+                                "Exact skill name as returned by list_skills "
+                                "(e.g., 'code-review')"
+                            ),
                         }
                     },
                     "required": ["name"],
                 },
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
             ),
             Tool(
                 name="get_skill_resource",
                 description=(
-                    "Load a specific resource file from a skill. Resources "
-                    "include scripts, references, and assets that support "
-                    "the skill's instructions."
+                    "Load one supporting file bundled with a skill (a "
+                    "script, reference doc, or asset). Use when: a skill you "
+                    "loaded with get_skill names a resource and you need its "
+                    "contents to proceed. Returns the raw file text. Address "
+                    "it as 'type/filename' where type is scripts, "
+                    "references, or assets.\n\n"
+                    'Example: get_skill_resource(skill_name="code-review", '
+                    'resource_path="references/checklist.md").'
                 ),
                 inputSchema={
                     "type": "object",
@@ -620,10 +722,20 @@ class SkillsMCPServer:
                     },
                     "required": ["skill_name", "resource_path"],
                 },
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
             ),
             Tool(
                 name="validate_skill",
-                description="Validate a skill directory against the Agent Skills spec",
+                description=(
+                    "Validate a skill directory on disk against the Agent "
+                    "Skills spec. Use when: authoring or editing a skill and "
+                    "you want to confirm its SKILL.md parses and its "
+                    "frontmatter is well-formed before publishing. Returns "
+                    "the parsed name, description, and body length, or a "
+                    "specific error. Disabled unless the operator "
+                    "allow-lists validation paths.\n\n"
+                    'Example: validate_skill(path="/skills/my-new-skill").'
+                ),
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -634,6 +746,7 @@ class SkillsMCPServer:
                     },
                     "required": ["path"],
                 },
+                annotations=READ_ONLY_TOOL_ANNOTATIONS,
             ),
         ]
 
@@ -820,7 +933,7 @@ class SkillsMCPServer:
                 arguments=[
                     PromptArgument(
                         name="args",
-                        description="Optional arguments for the skill",
+                        description=("Free-form arguments appended to the skill body"),
                         required=False,
                     )
                 ],
