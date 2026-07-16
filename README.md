@@ -48,13 +48,13 @@ The same skills are exposed through three complementary MCP surfaces, so a clien
 
 - **Resources** (`skills://` URIs) - Progressive disclosure for resource-aware clients (e.g. Roo Code, Cline). `skills://{name}` returns a skill's instructions; `skills://{name}/{type}/{file}` returns a sub-resource (scripts, references, assets). Sub-resources appear in the resource list once the skill has been read in that session, but a client that already knows a sub-resource URI can read it directly at any time.
 - **Tools** - Mirror the `Skill` tool pattern used by tool-calling agents (Claude Code, Roo Code, Cline, Continue):
-  - `list_skills` - Tier 1 catalog (names, descriptions, resource counts). The available skills are also embedded directly in the tool's description, so a model can see what exists without a separate call.
+  - `list_skills` - Tier 1 catalog (names, descriptions, resource counts). The available skills are also embedded directly in the tool's description (byte-budgeted for client description-size limits: full entries first, then a names-only overflow line), so a model can see what exists without a separate call. Live trials showed only the full entries drive unprompted uptake, so catalog order decides which skills can fire on their own — see [docs/agent-uptake.md](docs/agent-uptake.md). The tool carries the `anthropic/alwaysLoad` meta flag so clients with MCP tool search (Claude Code's default) keep its description in context instead of deferring it — measured to be the difference between agents never touching the server on natural prompts and using it reliably.
   - `get_skill` - Tier 2 activation: load a skill's full instructions and its resource listing.
   - `get_skill_resource` - Tier 3: load a specific resource file (`type/filename`, e.g. `scripts/analyze.py`).
   - `validate_skill` - Validate a skill directory against the spec. Disabled by default; enable it by allow-listing directories with the repeatable `--validation-path` CLI flag or the `server.validation_paths` config option. A path outside the allow-list is refused, and with no paths configured the tool answers with a "validation is disabled" message.
 - **Prompts** - Each skill is also exposed as an MCP prompt. Clients like Continue turn MCP prompts into slash commands, giving users `/skill-name` invocation.
 
-The server also ships MCP **instructions** that point clients at the `list_skills` → `get_skill` → `get_skill_resource` workflow.
+The server also ships MCP **instructions** that point clients at the `list_skills` → `get_skill` → `get_skill_resource` workflow, framed imperatively ("check the catalog even if you think you know how; the organization's skill is authoritative") and explicitly disambiguated from any built-in skills feature the client may have. All tools declare `readOnlyHint`/`idempotentHint` annotations.
 
 ### SEP-2640 alignment
 
