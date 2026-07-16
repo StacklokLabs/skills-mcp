@@ -32,9 +32,19 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Configuration: configuration.md
-  - Architecture: architecture/mcp-server-design.md
-  - Agent uptake: agent-uptake.md
+  - Getting started:
+      - Quickstart: getting-started/quickstart.md
+      - Connect your client: getting-started/clients.md
+  - Guides:
+      - Skill sources: guides/skill-sources.md
+      - Getting agents to use your skills: guides/agent-uptake.md
+      - Enabling skill validation: guides/validation.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - MCP surface: reference/mcp-surface.md
+  - Explanation:
+      - Architecture: explanation/architecture.md
+      - How agents discover served skills: explanation/agent-discovery.md
   - Changelog: changelog.md
 
 extra:
