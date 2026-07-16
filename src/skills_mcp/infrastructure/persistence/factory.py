@@ -44,7 +44,7 @@ class SourceType(Enum):
 
     LOCAL = "local"
     GIT = "git"
-    OCI = "oci"  # Future
+    OCI = "oci"
 
 
 @dataclass

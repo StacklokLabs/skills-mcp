@@ -16,6 +16,8 @@ from skills_mcp.__main__ import (
     setup_logging,
 )
 from skills_mcp.infrastructure.config.models import (
+    GitSkillConfig,
+    GitSourceConfig,
     LocalSourceConfig,
     ServerConfig,
     SkillsConfig,
@@ -260,6 +262,43 @@ class TestLoadConfiguration:
 
         assert result is not None
         assert result.version == "1"
+
+
+class TestRunServerSourceGating:
+    """Tests that any configured source type starts the server from config."""
+
+    async def test_git_only_config_uses_skills_config_repository(self) -> None:
+        """A git-only skills.yaml must not fall through to the env fallback.
+
+        Regression: run_server used to gate on local/OCI sources only, so a
+        valid git-only configuration exited with "no configuration found".
+        """
+        args = argparse.Namespace(
+            config=None, host=None, port=None, validation_paths=None
+        )
+        config = SkillsConfig(
+            git=GitSourceConfig(
+                skills=[GitSkillConfig(repo="git://github.com/org/skill@v1")]
+            )
+        )
+        server_cls = MagicMock()
+        server_cls.return_value.run_http = AsyncMock()
+        repo_factory = MagicMock(return_value=MagicMock())
+        env_fallback = MagicMock()
+        with (
+            patch("skills_mcp.__main__.parse_args", return_value=args),
+            patch("skills_mcp.__main__.load_configuration", return_value=config),
+            patch(
+                "skills_mcp.__main__.create_repository_from_skills_config",
+                repo_factory,
+            ),
+            patch("skills_mcp.__main__.get_skill_paths_from_env", env_fallback),
+            patch("skills_mcp.__main__.SkillsMCPServer", server_cls),
+        ):
+            await run_server()
+
+        repo_factory.assert_called_once_with(config)
+        env_fallback.assert_not_called()
 
 
 class TestRunServerValidationPaths:

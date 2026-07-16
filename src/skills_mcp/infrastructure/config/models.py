@@ -281,6 +281,12 @@ class SkillsConfig(BaseModel):
         """Check if Git sources are configured."""
         return self.git is not None and len(self.git.skills) > 0
 
+    def has_sources(self) -> bool:
+        """Check if any skill source (local, git, or OCI) is configured."""
+        return (
+            self.has_local_sources() or self.has_git_sources() or self.has_oci_sources()
+        )
+
     def is_empty(self) -> bool:
         """Check if no sources are configured."""
         return not (

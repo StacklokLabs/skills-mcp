@@ -340,6 +340,29 @@ class TestSkillsConfig:
         config = SkillsConfig(git=GitSourceConfig(skills=[]))
         assert config.has_git_sources() is False
 
+    def test_has_sources_empty_returns_false(self) -> None:
+        """Should return False when no source of any type is configured."""
+        config = SkillsConfig()
+        assert config.has_sources() is False
+
+    def test_has_sources_git_only_returns_true(self) -> None:
+        """A git-only config counts as having sources.
+
+        Regression: the entry point used to check only local/OCI sources,
+        so a valid git-only skills.yaml fell through to the env fallback.
+        """
+        config = SkillsConfig(
+            git=GitSourceConfig(
+                skills=[GitSkillConfig(repo="git://github.com/org/skill@v1")]
+            )
+        )
+        assert config.has_sources() is True
+
+    def test_has_sources_local_only_returns_true(self) -> None:
+        """A local-only config counts as having sources."""
+        config = SkillsConfig(local=LocalSourceConfig(paths=[Path("/skills")]))
+        assert config.has_sources() is True
+
     def test_is_empty_with_git(self) -> None:
         """Should return False when Git sources configured."""
         config = SkillsConfig(

@@ -194,7 +194,7 @@ async def run_server() -> None:
     )
 
     # Create repository
-    if config.has_local_sources() or config.has_oci_sources():
+    if config.has_sources():
         try:
             repository = create_repository_from_skills_config(config)
         except ValueError as e:
