@@ -123,6 +123,57 @@ model would not produce on its own.
   anyway, and the flag is inert for them. The disambiguation wording
   only matters for clients that have their own skills feature.
 
+## How this scales: large catalogs
+
+Unprompted discovery rides on a roughly 2KB context window (the
+always-loaded `list_skills` description), which fits about ten
+described skills. That gives a large catalog three tiers of
+visibility:
+
+1. **Full entries (about the first 10 skills).** Name plus trigger
+   description in context from turn 1. These fire unprompted — this is
+   the measured, working path.
+2. **Names only (the next few dozen, budget permitting).** Present in
+   an "Also available: pdf, pptx, ..." line. Measured result: a bare
+   name never triggered discovery (0/2 on a task matching a named
+   skill). These skills exist for a model that reads the catalog
+   deliberately, but do not fire on their own.
+3. **A bare count (everything past the byte budget).** Invisible until
+   something else causes a `list_skills` call.
+
+So with 100+ skills, expect roughly 90% of the catalog to be inert for
+unprompted use. Catalog order decides who gets tier 1, and today that
+order is simply source order (local paths first, then git sources,
+alphabetically) — there is no way yet to pin specific skills into the
+full entries.
+
+What to do about it, in order of confidence:
+
+- **Use CLAUDE.md steering per project.** At small catalog sizes the
+  steering line is optional reinforcement; at large sizes it becomes
+  the mechanism, because it forces the full-catalog call instead of
+  relying on the embedded preview. It measured 2/2 and its reliability
+  does not depend on catalog size. Different teams can name different
+  trigger domains in their own projects.
+- **Scope connections instead of growing the catalog.** A team rarely
+  needs 100 skills at once; serving a filtered subset per team keeps
+  each connection's catalog inside the budget honestly.
+- **Curate the order.** Until priority pinning exists, arrange sources
+  so the skills that matter most land in the first ten entries.
+
+Two directions are plausible but unmeasured: a search-style dispatch
+tool (`find_skill(task)`) whose always-loaded description carries
+domain *keywords* instead of full entries (keywords are ~10 bytes each,
+so 100 domains fit where 100 descriptions cannot — but we have already
+seen weak cues fail, so this needs trials before trusting it), and
+client-side support for the SEP-2640 skills extension, which would let
+clients preload served skill descriptions the way they preload local
+ones and remove the 2KB constraint entirely.
+
+Until then, the honest positioning is: a drop-in replacement up to
+roughly a dozen skills per connection; beyond that, add per-project
+steering or scoping.
+
 ## Known limitations and open questions
 
 - **A matching native skill preempts the server.** In one trial the
