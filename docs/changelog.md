@@ -4,6 +4,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-21
+
 ### Added
 
 - MCP server with progressive disclosure for Agent Skills
@@ -40,5 +42,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Initial release.
 
-[Unreleased]: https://github.com/stacklok/skills-mcp/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/StacklokLabs/skills-mcp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/StacklokLabs/skills-mcp/compare/v0.0.2...v0.2.0
 [0.1.0]: https://github.com/stacklok/skills-mcp/releases/tag/v0.1.0
