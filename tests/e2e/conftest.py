@@ -186,7 +186,6 @@ def mcp_client_factory(e2e_server: ServerInfo) -> ClientFactory:
         async with streamable_http_client(e2e_server.mcp_url) as (  # noqa: SIM117
             read,
             write,
-            _,
         ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -309,7 +308,6 @@ def mcp_client_factory_shared(e2e_server_module: ServerInfo) -> ClientFactory:
         async with streamable_http_client(e2e_server_module.mcp_url) as (  # noqa: SIM117
             read,
             write,
-            _,
         ):
             async with ClientSession(read, write) as session:
                 await session.initialize()

@@ -2,7 +2,7 @@
 
 Exercises each fixture skill exposed as an MCP prompt over a real Streamable
 HTTP transport, including the arguments marker, the typed resource listing,
-session expansion, and the error paths that surface as ``McpError``.
+session expansion, and the error paths that surface as ``MCPError``.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from contextlib import AbstractAsyncContextManager
 
 import pytest
 from mcp import ClientSession
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 
 
 # Type alias matches conftest.py
@@ -98,17 +98,17 @@ class TestGetPromptE2E:
     async def test_get_prompt_unknown_skill_raises_mcp_error(
         self, mcp_client_factory_shared: ClientFactory
     ) -> None:
-        """An unknown skill name surfaces as an McpError at the protocol layer."""
+        """An unknown skill name surfaces as an MCPError at the protocol layer."""
         async with mcp_client_factory_shared() as client:
-            with pytest.raises(McpError):
+            with pytest.raises(MCPError):
                 await client.get_prompt("no-such-skill")
 
     async def test_get_prompt_invalid_name_raises_mcp_error(
         self, mcp_client_factory_shared: ClientFactory
     ) -> None:
-        """An invalid skill name surfaces as an McpError at the protocol layer."""
+        """An invalid skill name surfaces as an MCPError at the protocol layer."""
         async with mcp_client_factory_shared() as client:
-            with pytest.raises(McpError):
+            with pytest.raises(MCPError):
                 await client.get_prompt("NOT VALID!!")
 
     async def test_get_prompt_empty_arguments_dict_omits_arguments_marker(

@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 # Marker file written into a cache snapshot once it is fully materialized.
 CACHE_COMPLETE_MARKER = ".skills-mcp-complete"
 
-# Manifest filename, matched case-insensitively during discovery.
+# Exact manifest filename required by the Agent Skills specification.
 SKILL_MANIFEST_FILENAME = "SKILL.md"
 
 # Directory names pruned from the discovery walk (besides dot-prefixed dirs),
@@ -158,7 +158,12 @@ class GitSkillRepository:
         async with self._cache_lock:
             if self._skills_cache is None:
                 await self._load_skills()
-            return self._skills_cache.get(name.value) if self._skills_cache else None
+            if not self._skills_cache:
+                return None
+            return next(
+                (skill for skill in self._skills_cache.values() if skill.name == name),
+                None,
+            )
 
     async def get_resource_content(
         self, skill_name: SkillName, resource_type: str, resource_name: str
@@ -228,16 +233,17 @@ class GitSkillRepository:
         for skill_ref in self._config.skills:
             skills = await self._try_fetch_repo(skill_ref)
             for skill in skills:
-                name = skill.name.value
-                if name in self._skills_cache:
+                assert skill.skill_path is not None
+                canonical_path = skill.skill_path.value
+                if canonical_path in self._skills_cache:
                     logger.warning(
-                        "Skill name %r from %s already provided by an earlier "
+                        "Skill path %r from %s already provided by an earlier "
                         "reference; keeping the first",
-                        name,
+                        canonical_path,
                         skill_ref.full_ref,
                     )
                     continue
-                self._skills_cache[name] = skill
+                self._skills_cache[canonical_path] = skill
 
         logger.info("Loaded %d skills from Git repositories", len(self._skills_cache))
 
@@ -736,26 +742,39 @@ class GitSkillRepository:
             dirnames[:] = sorted(
                 name for name in dirnames if not self._should_prune_dir(name)
             )
-            manifest_name = next(
-                (f for f in sorted(filenames) if f.lower() == "skill.md"), None
+            manifest_names = sorted(
+                (name for name in filenames if name.casefold() == "skill.md"),
+                key=lambda name: (name != "SKILL.md", name),
             )
-            if manifest_name is None:
+            if not manifest_names:
                 continue
+            manifest_name = manifest_names[0]
 
+            relative_path = dirpath.relative_to(walk_root).as_posix()
+            root_directory_name = (
+                ref.subdir.rstrip("/").rsplit("/", 1)[-1]
+                if ref.subdir is not None
+                else ref.repo
+            )
             skill = self._loader.load_skill(
-                dirpath, dirpath / manifest_name, self._read_manifest
+                dirpath,
+                dirpath / manifest_name,
+                self._read_manifest,
+                relative_path,
+                root_directory_name if relative_path == "." else dirpath.name,
             )
             if skill is None:
                 continue
-            name = skill.name.value
-            if name in skills:
+            assert skill.skill_path is not None
+            canonical_path = skill.skill_path.value
+            if canonical_path in skills:
                 logger.warning(
-                    "Duplicate skill name %r in %s; keeping first occurrence",
-                    name,
+                    "Duplicate skill path %r in %s; keeping first occurrence",
+                    canonical_path,
                     ref.full_ref,
                 )
                 continue
-            skills[name] = skill
+            skills[canonical_path] = skill
 
         if (sha_dir / ".gitmodules").is_file():
             logger.warning(
@@ -775,15 +794,14 @@ class GitSkillRepository:
     def _should_prune_dir(name: str) -> bool:
         """Return True for directory names excluded from discovery.
 
-        Dot-prefixed directories and (case-insensitively) ``template``/
-        ``readme`` are pruned, consistent with case-insensitive SKILL.md
-        matching.
+        Dot-prefixed directories and ``template``/``readme`` (matched
+        case-insensitively) are pruned.
         """
         return name.startswith(".") or name.lower() in PRUNED_DIR_NAMES
 
     def _read_manifest(
-        self, manifest_path: Path, dir_name: str
-    ) -> tuple[SkillManifest, str] | None:
+        self, content: bytes, source: str, dir_name: str
+    ) -> tuple[SkillManifest, str, bool] | None:
         """Parse a manifest, falling back to the directory name if unnamed.
 
         The frontmatter ``name`` is authoritative; when it differs from the
@@ -794,51 +812,53 @@ class GitSkillRepository:
         :class:`SkillLoader`.
 
         Args:
-            manifest_path: Path to the SKILL.md file.
+            content: Exact captured ``SKILL.md`` bytes.
+            source: Source label for parse errors.
             dir_name: The containing directory name (fallback identity).
 
         Returns:
-            A ``(manifest, body)`` tuple, or None if the skill must be skipped.
+            A ``(manifest, body, SEP eligible)`` tuple, or None if skipped.
         """
         try:
-            manifest, body = self._parser.parse_file(manifest_path)
+            manifest, body = self._parser.parse_bytes(content, source)
         except MissingRequiredFieldError as exc:
             if exc.field != "name" or not SkillName.is_valid(dir_name):
-                logger.warning("Skipping skill at %s: %s", manifest_path.parent, exc)
+                logger.warning("Skipping skill at %s: %s", source, exc)
                 return None
-            return self._parse_with_dir_name(manifest_path, dir_name)
+            return self._parse_with_dir_name(content, source, dir_name)
         except ManifestParseError as exc:
-            logger.warning("Skipping skill at %s: %s", manifest_path.parent, exc)
+            logger.warning("Skipping skill at %s: %s", source, exc)
             return None
 
-        if manifest.name.value != dir_name:
+        sep_eligible = manifest.name.value == dir_name
+        if not sep_eligible:
             logger.warning(
-                "Skill name %r differs from directory %r; frontmatter wins",
+                "Skill name %r differs from directory %r; frontmatter wins for "
+                "legacy access and the skill is omitted from SEP",
                 manifest.name.value,
                 dir_name,
             )
-        return manifest, body
+        return manifest, body, sep_eligible
 
     def _parse_with_dir_name(
-        self, manifest_path: Path, dir_name: str
-    ) -> tuple[SkillManifest, str] | None:
-        """Parse a manifest with the directory name injected as the skill name."""
+        self, content: bytes, source: str, dir_name: str
+    ) -> tuple[SkillManifest, str, bool] | None:
+        """Inject a legacy directory-name fallback into captured bytes."""
         try:
-            content = manifest_path.read_text(encoding="utf-8")
-            post = frontmatter.loads(content)
+            text = content.decode("utf-8")
+            post = frontmatter.loads(text)
             post["name"] = dir_name
-            manifest, body = self._parser.parse_content(
-                frontmatter.dumps(post), str(manifest_path)
-            )
-        except (OSError, ManifestParseError) as exc:
-            logger.warning("Skipping skill at %s: %s", manifest_path.parent, exc)
+            manifest, body = self._parser.parse_content(frontmatter.dumps(post), source)
+        except (UnicodeDecodeError, ManifestParseError) as exc:
+            logger.warning("Skipping skill at %s: %s", source, exc)
             return None
         logger.warning(
-            "Skill at %s has no 'name'; using directory name %r",
-            manifest_path.parent,
+            "Skill at %s has no 'name'; using directory name %r for legacy access; "
+            "the skill is omitted from SEP",
+            source,
             dir_name,
         )
-        return manifest, body
+        return manifest, body, False
 
     def _repo_cache_root(self, ref: GitSkillReference) -> Path:
         """Return the per-repository cache root (host/owner/repo)."""

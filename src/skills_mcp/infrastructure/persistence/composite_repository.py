@@ -84,13 +84,14 @@ class CompositeSkillRepository:
         for idx, repo in enumerate(self._repositories):
             skills = await repo.list_all()
             for skill in skills:
-                name = skill.name.value
-                if name not in first_seen:
-                    first_seen[name] = idx
+                assert skill.skill_path is not None
+                canonical_path = skill.skill_path.value
+                if canonical_path not in first_seen:
+                    first_seen[canonical_path] = idx
                     all_skills.append(skill)
                 else:
-                    winner_idx = first_seen[name]
-                    collision = (name, winner_idx, idx)
+                    winner_idx = first_seen[canonical_path]
+                    collision = (canonical_path, winner_idx, idx)
                     # First sighting of a unique collision warns; repeats drop
                     # to DEBUG so per-request list_all calls don't flood logs.
                     if collision in self._warned_collisions:
@@ -100,9 +101,9 @@ class CompositeSkillRepository:
                         level = logging.WARNING
                     logger.log(
                         level,
-                        "Skill name collision: '%s' from %s is shadowed by %s "
+                        "Skill path collision: '%s' from %s is shadowed by %s "
                         "(first-listed repository wins)",
-                        name,
+                        canonical_path,
                         self._source_label(idx),
                         self._source_label(winner_idx),
                     )

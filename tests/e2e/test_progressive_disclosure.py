@@ -7,11 +7,14 @@ from contextlib import AbstractAsyncContextManager
 
 import pytest
 from mcp import ClientSession
-from pydantic import AnyUrl
 
 
 # Type alias matches conftest.py
 ClientFactory = Callable[[], AbstractAsyncContextManager[ClientSession]]
+
+
+def _uri(value: str) -> str:
+    return value
 
 
 @pytest.mark.e2e
@@ -63,7 +66,7 @@ class TestTier2Instructions:
     ) -> None:
         """Reading skill should return SKILL.md body content."""
         async with mcp_client_factory() as mcp_client:
-            content = await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            content = await mcp_client.read_resource(_uri("skills://valid-skill"))
 
             assert len(content.contents) == 1
             text_content = content.contents[0]
@@ -89,7 +92,7 @@ class TestTier2Instructions:
             ), "Sub-resources visible before expansion"
 
             # Read the skill (triggers expansion)
-            await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            await mcp_client.read_resource(_uri("skills://valid-skill"))
 
             # List resources again (should now include sub-resources)
             resources_after = await mcp_client.list_resources()
@@ -118,11 +121,11 @@ class TestTier3SubResources:
         """Should be able to read script content after expansion."""
         async with mcp_client_factory() as mcp_client:
             # First expand the skill
-            await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            await mcp_client.read_resource(_uri("skills://valid-skill"))
 
             # Now read the script
             content = await mcp_client.read_resource(
-                AnyUrl("skills://valid-skill/scripts/analyze.py")
+                _uri("skills://valid-skill/scripts/analyze.py")
             )
 
             assert len(content.contents) == 1
@@ -138,10 +141,10 @@ class TestTier3SubResources:
     ) -> None:
         """Should be able to read reference content after expansion."""
         async with mcp_client_factory() as mcp_client:
-            await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            await mcp_client.read_resource(_uri("skills://valid-skill"))
 
             content = await mcp_client.read_resource(
-                AnyUrl("skills://valid-skill/references/GUIDE.md")
+                _uri("skills://valid-skill/references/GUIDE.md")
             )
 
             assert len(content.contents) == 1
@@ -153,10 +156,10 @@ class TestTier3SubResources:
     async def test_read_asset_content(self, mcp_client_factory: ClientFactory) -> None:
         """Should be able to read asset content after expansion."""
         async with mcp_client_factory() as mcp_client:
-            await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            await mcp_client.read_resource(_uri("skills://valid-skill"))
 
             content = await mcp_client.read_resource(
-                AnyUrl("skills://valid-skill/assets/config.json")
+                _uri("skills://valid-skill/assets/config.json")
             )
 
             assert len(content.contents) == 1

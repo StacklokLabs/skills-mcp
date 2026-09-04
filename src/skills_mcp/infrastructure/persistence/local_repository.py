@@ -12,14 +12,14 @@ from pathlib import Path  # noqa: TC003 - used at runtime
 from typing import TYPE_CHECKING
 
 from skills_mcp.domain.exceptions import ResourceNotFoundError, SkillNotFoundError
-from skills_mcp.domain.models.resource import ResourceType, SkillResource
-from skills_mcp.domain.models.skill import Skill
+from skills_mcp.domain.models.resource import ResourceType
 from skills_mcp.domain.services.manifest_parser import ManifestParser
 from skills_mcp.domain.services.token_estimator import TokenEstimator
-from skills_mcp.infrastructure.persistence.mtime import file_mtime_utc
+from skills_mcp.infrastructure.persistence.skill_loader import SkillLoader, is_path_safe
 
 
 if TYPE_CHECKING:
+    from skills_mcp.domain.models.skill import Skill
     from skills_mcp.domain.models.skill_name import SkillName
 
 
@@ -69,6 +69,7 @@ class LocalSkillRepository:
         self._paths = [p.resolve() for p in paths]
         self._parser = parser or ManifestParser()
         self._token_estimator = token_estimator or TokenEstimator()
+        self._loader = SkillLoader(self._parser, self._token_estimator)
         self._skills_cache: dict[str, Skill] | None = None
         self._cache_lock = asyncio.Lock()
 
@@ -95,7 +96,12 @@ class LocalSkillRepository:
         async with self._cache_lock:
             if self._skills_cache is None:
                 await self._load_skills()
-            return self._skills_cache.get(name.value) if self._skills_cache else None
+            if not self._skills_cache:
+                return None
+            return next(
+                (skill for skill in self._skills_cache.values() if skill.name == name),
+                None,
+            )
 
     async def get_resource_content(
         self, skill_name: SkillName, resource_type: str, resource_name: str
@@ -182,124 +188,63 @@ class LocalSkillRepository:
         )
 
     async def _scan_directory(self, base_path: Path) -> None:
-        """Scan a directory for skill folders.
-
-        Args:
-            base_path: The directory to scan.
-        """
-        for item in base_path.iterdir():  # noqa: ASYNC240  # sync local-fs by design
-            if not item.is_dir():
-                continue
-
-            manifest_path = item / SKILL_MANIFEST_FILENAME
-            if not manifest_path.exists():
-                continue
-
-            try:
-                skill = await self._load_skill(item, manifest_path)
-                if self._skills_cache is not None:
-                    self._skills_cache[skill.name.value] = skill
-                logger.debug("Loaded skill: %s", skill.name.value)
-            except Exception:
-                logger.exception("Failed to load skill from %s", item)
-
-    async def _load_skill(self, skill_dir: Path, manifest_path: Path) -> Skill:
-        """Load a single skill from disk.
-
-        Args:
-            skill_dir: The skill directory.
-            manifest_path: Path to the SKILL.md file.
-
-        Returns:
-            The loaded Skill object.
-        """
-        # Parse the manifest
-        manifest, body = self._parser.parse_file(manifest_path)
-
-        # Estimate tokens for the body
-        token_count = self._token_estimator.estimate(body)
-
-        # Discover resources
-        scripts = await self._discover_resources(skill_dir / "scripts", skill_dir)
-        references = await self._discover_resources(skill_dir / "references", skill_dir)
-        assets = await self._discover_resources(skill_dir / "assets", skill_dir)
-
-        return Skill(
-            manifest=manifest,
-            body=body,
-            path=skill_dir.resolve(),  # noqa: ASYNC240  # sync local-fs by design
-            scripts=scripts,
-            references=references,
-            assets=assets,
-            token_count=token_count,
-            last_modified=file_mtime_utc(manifest_path),
-        )
-
-    async def _discover_resources(
-        self, resource_dir: Path, skill_dir: Path
-    ) -> list[SkillResource]:
-        """Discover resources in a resource directory.
-
-        Args:
-            resource_dir: The directory to scan (scripts/, references/, or assets/).
-            skill_dir: The skill directory (for path safety checks).
-
-        Returns:
-            List of discovered resources.
-        """
-        # sync local-fs by design
-        if not resource_dir.exists() or not resource_dir.is_dir():  # noqa: ASYNC240
-            return []
-
-        resources = []
-        for item in resource_dir.iterdir():  # noqa: ASYNC240  # sync local-fs by design
-            if not item.is_file():
-                continue
-
-            # Skip hidden files
-            if item.name.startswith("."):
-                continue
-
-            try:
-                # Resolve the path and check for path traversal
-                resolved_path = item.resolve()
-                if not self._is_path_safe(resolved_path, skill_dir):
-                    logger.warning(
-                        "Skipping resource outside skill directory: %s", item
-                    )
-                    continue
-
-                # Estimate token count for the resource
-                content = item.read_bytes()
-                token_count = self._token_estimator.estimate_file(content)
-
-                resource = SkillResource.from_path(
-                    resolved_path,
-                    token_count,
-                    last_modified=file_mtime_utc(resolved_path),
+        """Recursively scan one source root for strict skills."""
+        manifests = sorted(
+            (
+                path
+                for path in base_path.rglob(  # noqa: ASYNC240
+                    SKILL_MANIFEST_FILENAME
                 )
-                resources.append(resource)
+                if path.is_file()
+            ),
+            key=lambda path: path.as_posix(),
+        )
+        for manifest_path in manifests:
+            skill_dir = manifest_path.parent
+            try:
+                skill = await self._load_skill(
+                    skill_dir,
+                    manifest_path,
+                    skill_dir.relative_to(base_path).as_posix(),
+                )
+                assert skill.skill_path is not None
+                canonical_path = skill.skill_path.value
+                if self._skills_cache is not None:
+                    if canonical_path in self._skills_cache:
+                        logger.warning(
+                            "Skill path %r from root %s is shadowed by an earlier "
+                            "configured root",
+                            canonical_path,
+                            base_path,
+                        )
+                        continue
+                    self._skills_cache[canonical_path] = skill
+                logger.debug("Loaded skill path: %s", canonical_path)
             except Exception:
-                logger.exception("Failed to load resource: %s", item)
+                logger.exception("Failed to load skill from %s", skill_dir)
 
-        return resources
+    async def _load_skill(
+        self,
+        skill_dir: Path,
+        manifest_path: Path,
+        source_relative_path: str | None = None,
+    ) -> Skill:
+        """Load a strict skill from disk with the shared loader."""
+        skill = self._loader.load_skill(
+            skill_dir,
+            manifest_path,
+            lambda content, source, _name: (
+                *self._parser.parse_bytes(content, source),
+                True,
+            ),
+            source_relative_path,
+        )
+        if skill is None:
+            raise ValueError(
+                "Skill manifest is unsafe or its name mismatches its directory"
+            )
+        return skill
 
     def _is_path_safe(self, path: Path, base_path: Path) -> bool:
-        """Check if a path is safe (within the base path).
-
-        This prevents path traversal attacks by ensuring the resolved path
-        is within the expected skill directory.
-
-        Args:
-            path: The path to check.
-            base_path: The base path that should contain the file.
-
-        Returns:
-            True if the path is safe, False otherwise.
-        """
-        try:
-            resolved = path.resolve()
-            base_resolved = base_path.resolve()
-            return resolved.is_relative_to(base_resolved)
-        except (ValueError, OSError):
-            return False
+        """Check whether a path resolves within its skill directory."""
+        return is_path_safe(path, base_path)

@@ -7,6 +7,7 @@ import pytest
 
 from skills_mcp.domain.exceptions import SkillNotFoundError
 from skills_mcp.domain.models.skill_name import SkillName
+from skills_mcp.domain.models.skill_path import SkillPath
 from skills_mcp.infrastructure.persistence.composite_repository import (
     CompositeSkillRepository,
 )
@@ -18,6 +19,7 @@ def create_mock_skill(name: str) -> MagicMock:
     # SkillName is frozen, so we need to create a real one and use it
     skill_name = SkillName(name)
     skill.name = skill_name
+    skill.skill_path = SkillPath(name)
     return skill
 
 
@@ -73,11 +75,12 @@ class TestCompositeSkillRepository:
 
         assert len(skills) == 3
 
-    async def test_list_all_deduplicates_by_name(self) -> None:
-        """Should use first repository's skill when names conflict."""
+    async def test_list_all_preserves_duplicate_names_at_distinct_paths(self) -> None:
+        """Duplicate display names do not collide when canonical paths differ."""
         skill1_v1 = create_mock_skill("same-skill")
         skill1_v1.version = "v1"
         skill1_v2 = create_mock_skill("same-skill")
+        skill1_v2.skill_path = SkillPath("other/same-skill")
         skill1_v2.version = "v2"
 
         repo1 = create_mock_repository([skill1_v1])
@@ -86,8 +89,8 @@ class TestCompositeSkillRepository:
         composite = CompositeSkillRepository([repo1, repo2])
         skills = await composite.list_all()
 
-        assert len(skills) == 1
-        assert skills[0].version == "v1"
+        assert len(skills) == 2
+        assert [skill.version for skill in skills] == ["v1", "v2"]
 
     async def test_list_all_name_collision_logs_warning_with_provenance(
         self, caplog: pytest.LogCaptureFixture
@@ -95,6 +98,7 @@ class TestCompositeSkillRepository:
         """Should warn once with source provenance when names collide."""
         skill_v1 = create_mock_skill("dup-skill")
         skill_v2 = create_mock_skill("dup-skill")
+        skill_v2.skill_path = skill_v1.skill_path
 
         repo1 = create_mock_repository([skill_v1])
         repo2 = create_mock_repository([skill_v2])
@@ -121,8 +125,11 @@ class TestCompositeSkillRepository:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Should warn only once even across repeated list_all calls."""
-        repo1 = create_mock_repository([create_mock_skill("dup-skill")])
-        repo2 = create_mock_repository([create_mock_skill("dup-skill")])
+        skill_v1 = create_mock_skill("dup-skill")
+        skill_v2 = create_mock_skill("dup-skill")
+        skill_v2.skill_path = skill_v1.skill_path
+        repo1 = create_mock_repository([skill_v1])
+        repo2 = create_mock_repository([skill_v2])
 
         composite = CompositeSkillRepository([repo1, repo2])
 
@@ -137,8 +144,11 @@ class TestCompositeSkillRepository:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Should log the repeat collision at DEBUG (not silently drop it)."""
-        repo1 = create_mock_repository([create_mock_skill("dup-skill")])
-        repo2 = create_mock_repository([create_mock_skill("dup-skill")])
+        skill_v1 = create_mock_skill("dup-skill")
+        skill_v2 = create_mock_skill("dup-skill")
+        skill_v2.skill_path = skill_v1.skill_path
+        repo1 = create_mock_repository([skill_v1])
+        repo2 = create_mock_repository([skill_v2])
 
         composite = CompositeSkillRepository([repo1, repo2])
 

@@ -2,6 +2,10 @@
 
 The server speaks MCP over Streamable HTTP at `http://<host>:<port>/mcp` (by default `http://localhost:8080/mcp`). If you don't have a server running yet, the [quickstart](quickstart.md) gets you one; host, port, and skill sources are covered in the [configuration reference](../reference/configuration.md). Any MCP client that supports Streamable HTTP can connect. This page covers the clients the server is tested or designed against; for how each surface behaves once connected, see the [MCP surface reference](../reference/mcp-surface.md).
 
+## Extension-aware and legacy clients
+
+Clients using MCP SDK v2 modern discovery can negotiate `io.modelcontextprotocol/skills` and use `skills/list`, `skills/get`, and exact `skill://` resource reads. They receive complete static file metadata and byte-faithful text/blob content. A legacy `initialize` client does not receive an unnegotiated extension claim and continues to use tools, prompts, or progressive `skills://` resources. `directoryRead` is not implemented in either mode.
+
 ## Claude Code
 
 Add the server from the command line:
@@ -25,7 +29,7 @@ Or declare it in a project's `.mcp.json`:
 
 Notes for Claude Code:
 
-- No extra configuration is needed for agents to pick up served skills on natural prompts. The `list_skills` tool stays loaded in context via the `anthropic/alwaysLoad` flag; see [getting agents to use your skills](../guides/agent-uptake.md).
+- The `list_skills` tool stays loaded in context via `anthropic/alwaysLoad`, but its description is deliberately static and contains no untrusted skill metadata. Add explicit project steering to call `list_skills` when reliable uptake matters; see [getting agents to use your skills](../guides/agent-uptake.md).
 - In interactive sessions, each served skill is also available as a slash command: `/mcp__<server-name>__<skill-name>`. This path does not work in print mode (`claude -p` rejects MCP prompt commands).
 
 ## Claude Desktop
@@ -44,7 +48,7 @@ Add the server to `claude_desktop_config.json`:
 
 ## Cline and Roo Code
 
-Both are resource-aware clients: besides the tools, they can browse skills directly as `skills://` resources with progressive disclosure (sub-resources appear after a skill is read). Add the server in the client's MCP settings as a remote (Streamable HTTP) server pointing at `http://localhost:8080/mcp`.
+Both are resource-aware clients: besides the legacy tools, they can browse `skills://` resources with progressive disclosure. If a client version implements the accepted SEP-2640 extension, prefer its negotiated `skills/list`/`skills/get` path and canonical `skill://` reads; otherwise no configuration change is required.
 
 ## Continue
 

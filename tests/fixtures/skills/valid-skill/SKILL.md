@@ -6,7 +6,12 @@ compatibility: claude-3
 metadata:
   author: test-author
   version: "1.0"
+  nested:
+    enabled: true
+    levels: [1, 2]
 allowed-tools: Read Write Bash
+x-test-field:
+  preserve: [alpha, 7]
 ---
 
 # Valid Skill

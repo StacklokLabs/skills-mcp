@@ -4,6 +4,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Accepted SEP-2640 snapshot (`d6b31a03504c15677d49b922b6b6ace0ef65728d`): negotiated `io.modelcontextprotocol/skills` extension capability, `skills/list`, `skills/get`, and canonical `skill://<skill-path>/SKILL.md` resources. This is snapshot alignment, not final conformance; `directoryRead` remains deferred.
+- Complete static snapshots with recursive arbitrary/hidden/binary files, exact byte sizes, SHA-256 digests, direct canonical reads, and text/blob round-trip integrity.
+
+### Changed
+
+- Upgraded the Python MCP SDK to `mcp[cli]>=2.1.1,<3` and migrated Streamable HTTP server/client APIs.
+- Canonical skill identity is now source-relative path rather than name. Duplicate names coexist; precedence applies only to exact path collisions, while legacy name APIs remain first-match.
+- Frontmatter preserves all JSON-compatible fields and nested types, including unknown keys and the original `allowed-tools` shape. Extension-published skills require frontmatter name/directory agreement.
+- Server instructions now describe origin and host-policy requirements instead of claiming skills are vetted, authoritative, or mandatory.
+
+### Security
+
+- Static skills reject non-JSON YAML, escaping symlinks, traversal, more than 512 files, and more than 16 MiB total.
+
 ## [0.2.0] - 2026-07-21
 
 ### Added
@@ -12,7 +28,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Session-based state tracking for expanded skills
 - Local filesystem skill repository with caching
 - Git skill source (`git:` config): HTTPS clones from `git://host/owner/repo[@ref][#subdir]` references (tag, branch, or pinned commit) with case-insensitive `SKILL.md` discovery, `#subdir` scoping, a commit-SHA-keyed snapshot cache, stale-serve-when-offline, and token auth (per-host config or `GITHUB_TOKEN`/`GITLAB_TOKEN`/`GIT_TOKEN` fallback; `GIT_TOKEN` is unscoped, prefer host-scoped tokens). SSRF-hardened (parse-time IP-literal rejection plus a pre-clone `getaddrinfo` check, bypassable with `allow_private_hosts`); references validated at startup, fetched lazily, failures non-fatal at WARNING. SSH, submodules (ignored with a warning), and marketplace/index parsing are out of scope; residual risks (DNS-rebinding/redirect TOCTOU, unbounded clone size) documented in [skill sources](guides/skill-sources.md#security-notes-and-accepted-residuals)
-- SEP-2640 resource annotations on every listed resource: `audience` (`["assistant"]`), `priority` (0.8 skill-level, 0.3 sub-resources), ISO 8601 `lastModified` from file mtime (omitted when unknown); see [MCP surface](reference/mcp-surface.md#sep-2640-alignment)
+- SEP-2640 resource annotations on every listed resource: `audience` (`["assistant"]`), `priority` (0.8 skill-level, 0.3 sub-resources), ISO 8601 `lastModified` from file mtime (omitted when unknown); see [MCP surface](reference/mcp-surface.md#sep-2640-skills-extension)
 - `last_modified` on the `Skill` and `SkillResource` domain models, populated from file mtime by the local and OCI repositories
 - Experimental `io.modelcontextprotocol/skills` capability on `initialize`, via a `Server` subclass that also corrects `resources.listChanged` to `true`
 - `validate_skill` tool, disabled by default; allow-list directories with the repeatable `--validation-path` CLI flag or `server.validation_paths` (CLI takes precedence); see [enabling skill validation](guides/validation.md)
