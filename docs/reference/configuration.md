@@ -82,7 +82,7 @@ For task-oriented walkthroughs of each source type, see [skill sources](../guide
 | `oci` | section | unset | OCI registry sources |
 | `server` | section | defaults | Server settings |
 
-At least one source section (`local`, `git`, or `oci`) with entries must be present, unless `SKILLS_MCP_PATHS` is set. Any combination works, including a git-only or OCI-only configuration. On skill name collisions, local takes precedence over git, then OCI.
+At least one source section (`local`, `git`, or `oci`) with entries must be present, unless `SKILLS_MCP_PATHS` is set. Any combination works, including a git-only or OCI-only configuration. On exact canonical source-relative path collisions, local takes precedence over git, then OCI; duplicate names at distinct paths remain available.
 
 ### `local`
 

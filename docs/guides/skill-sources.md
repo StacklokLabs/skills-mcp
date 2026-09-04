@@ -2,7 +2,7 @@
 
 The server loads skills from three kinds of source, in any combination: local directories, git repositories, and OCI registries. Sources are declared in a `skills.yaml` config file (see the [configuration reference](../reference/configuration.md) for where the file lives and how precedence works).
 
-When the same skill name appears in more than one source, local wins over git, and git wins over OCI. A shadowed skill is not dropped silently: each unique collision is logged once at `WARNING` with provenance (which source shadows which).
+When the same canonical source-relative skill path appears in more than one source, local wins over git, and git wins over OCI. Duplicate frontmatter names at distinct paths coexist; legacy name lookup returns the first match. A shadowed path is logged once at `WARNING` with provenance.
 
 ## Local directories
 
@@ -18,7 +18,7 @@ local:
 
 ## Git repositories
 
-Skills are cloned from git repositories over HTTPS, and every directory containing a `SKILL.md` (matched case-insensitively) is discovered.
+Skills are cloned from git repositories over HTTPS, and every directory containing an exact `SKILL.md` filename is discovered recursively. Legacy tools, prompts, and `skills://` resources preserve the documented permissive behavior: a missing name falls back to a valid directory name, while an explicit frontmatter name wins if it differs. Those nonconformant entries are omitted from SEP publication; `skills/list` includes only entries whose name matches the directory and whose captured snapshot is complete and internally consistent.
 
 Public repositories need no auth configuration. The simplest possible git source points at a public repo with no `auth` block at all:
 

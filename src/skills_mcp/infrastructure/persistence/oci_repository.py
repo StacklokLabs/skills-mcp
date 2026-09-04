@@ -113,7 +113,12 @@ class OCISkillRepository:
         async with self._cache_lock:
             if self._skills_cache is None:
                 await self._load_skills()
-            return self._skills_cache.get(name.value) if self._skills_cache else None
+            if not self._skills_cache:
+                return None
+            return next(
+                (skill for skill in self._skills_cache.values() if skill.name == name),
+                None,
+            )
 
     async def get_resource_content(
         self, skill_name: SkillName, resource_type: str, resource_name: str
@@ -185,7 +190,10 @@ class OCISkillRepository:
         for skill_ref in self._config.skills:
             skill = await self._try_pull_skill(skill_ref)
             if skill is not None:
-                self._skills_cache[skill.name.value] = skill
+                canonical_path = getattr(skill.skill_path, "value", None)
+                if not isinstance(canonical_path, str):
+                    canonical_path = skill.name.value
+                self._skills_cache.setdefault(canonical_path, skill)
 
         logger.info("Loaded %d skills from OCI registries", len(self._skills_cache))
 
@@ -218,7 +226,7 @@ class OCISkillRepository:
 
         if manifest_path.exists():
             logger.debug("Using cached skill: %s", ref.full_ref)
-            return await self._load_skill_from_dir(skill_dir, manifest_path)
+            return await self._load_skill_from_dir(skill_dir, manifest_path, ref.name)
 
         # Pull from registry using oras
         logger.info("Pulling skill from registry: %s", ref.full_ref)
@@ -242,7 +250,7 @@ class OCISkillRepository:
 
         # Load the skill from extracted files
         if manifest_path.exists():
-            return await self._load_skill_from_dir(skill_dir, manifest_path)
+            return await self._load_skill_from_dir(skill_dir, manifest_path, ref.name)
 
         logger.warning("No SKILL.md found in pulled artifact: %s", ref.full_ref)
         return None
@@ -371,27 +379,35 @@ class OCISkillRepository:
             tar.extractall(output_dir, filter="data")
 
     async def _load_skill_from_dir(
-        self, skill_dir: Path, manifest_path: Path
+        self,
+        skill_dir: Path,
+        manifest_path: Path,
+        source_relative_path: str | None = None,
     ) -> Skill | None:
         """Load a skill from an extracted directory (strict manifest parsing).
 
         Args:
             skill_dir: The skill directory.
             manifest_path: Path to the SKILL.md file.
+            source_relative_path: Canonical path for the OCI skill.
 
         Returns:
             The loaded Skill object, or None if the manifest escapes the
             skill directory.
         """
         return self._loader.load_skill(
-            skill_dir, manifest_path, self._read_manifest_strict
+            skill_dir,
+            manifest_path,
+            self._read_manifest_strict,
+            source_relative_path,
         )
 
     def _read_manifest_strict(
-        self, manifest_path: Path, _dir_name: str
-    ) -> tuple[SkillManifest, str]:
-        """Parse a manifest strictly; a missing required field is an error."""
-        return self._parser.parse_file(manifest_path)
+        self, content: bytes, source: str, _dir_name: str
+    ) -> tuple[SkillManifest, str, bool]:
+        """Parse captured manifest bytes strictly for SEP publication."""
+        manifest, body = self._parser.parse_bytes(content, source)
+        return manifest, body, True
 
     async def _discover_resources(
         self, resource_dir: Path, skill_dir: Path

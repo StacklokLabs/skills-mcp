@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest
 from skills_mcp.domain.exceptions import ResourceNotFoundError, SkillNotFoundError
 from skills_mcp.domain.models.skill_name import SkillName
 from skills_mcp.domain.repositories import SkillRepository
+from skills_mcp.infrastructure.mcp.server import SkillsMCPServer
 from skills_mcp.infrastructure.persistence.git_models import (
     GitAuthConfig,
     GitRepositoryConfig,
@@ -127,9 +129,9 @@ class TestDiscoveryLayouts:
     async def test_p2_root_skill_md(self, cache_dir: Path) -> None:
         ref = _pinned_ref(_sha("b"))
         repo = _repo(cache_dir, ref)
-        _write_snapshot(repo, ref, {"SKILL.md": _skill_md("root-skill")})
+        _write_snapshot(repo, ref, {"SKILL.md": _skill_md("repo")})
         names = {s.name.value for s in await repo.list_all()}
-        assert names == {"root-skill"}
+        assert names == {"repo"}
 
     async def test_p3_plugins_nested(self, cache_dir: Path) -> None:
         ref = _pinned_ref(_sha("c"))
@@ -138,12 +140,12 @@ class TestDiscoveryLayouts:
             repo,
             ref,
             {
-                "plugins/p1/skills/s1/SKILL.md": _skill_md("nested-one"),
-                "plugins/p2/skills/s2/SKILL.md": _skill_md("nested-two"),
+                "plugins/p1/skills/s1/SKILL.md": _skill_md("s1"),
+                "plugins/p2/skills/s2/SKILL.md": _skill_md("s2"),
             },
         )
         names = {s.name.value for s in await repo.list_all()}
-        assert names == {"nested-one", "nested-two"}
+        assert names == {"s1", "s2"}
 
     async def test_p4_multi_root(self, cache_dir: Path) -> None:
         ref = _pinned_ref(_sha("d"))
@@ -152,13 +154,13 @@ class TestDiscoveryLayouts:
             repo,
             ref,
             {
-                "a/SKILL.md": _skill_md("skill-a"),
-                "b/c/SKILL.md": _skill_md("skill-c"),
-                "SKILL.md": _skill_md("skill-root"),
+                "a/SKILL.md": _skill_md("a"),
+                "b/c/SKILL.md": _skill_md("c"),
+                "SKILL.md": _skill_md("repo"),
             },
         )
         names = {s.name.value for s in await repo.list_all()}
-        assert names == {"skill-a", "skill-c", "skill-root"}
+        assert names == {"a", "c", "repo"}
 
     async def test_loads_resources(self, cache_dir: Path) -> None:
         ref = _pinned_ref(_sha("e"))
@@ -185,9 +187,19 @@ class TestManifestCasing:
     ) -> None:
         ref = _pinned_ref(_sha("a"))
         repo = _repo(cache_dir, ref)
-        _write_snapshot(repo, ref, {f"skills/c/{filename}": _skill_md("cased")})
-        names = {s.name.value for s in await repo.list_all()}
-        assert names == {"cased"}
+        _write_snapshot(repo, ref, {f"skills/c/{filename}": _skill_md("c")})
+        skills = await repo.list_all()
+        assert {s.name.value for s in skills} == {"c"}
+        assert skills[0].sep_eligible is (filename == "SKILL.md")
+        server = SkillsMCPServer(repo)
+        legacy = await server._handle_list_resources()
+        assert [resource.name for resource in legacy] == ["c"]
+        legacy_get = json.loads((await server._tool_get_skill("c"))[0].text)
+        assert legacy_get["name"] == "c"
+        static = await server._static_skills()
+        assert [skill.name.value for skill in static] == (
+            ["c"] if filename == "SKILL.md" else []
+        )
 
 
 class TestPruning:
@@ -247,8 +259,7 @@ class TestSymlinks:
         (scripts / "evil.py").symlink_to(secret)
 
         skill = await repo.find_by_name(SkillName("s"))
-        assert skill is not None
-        assert skill.scripts == []
+        assert skill is None
 
 
 class TestIdentity:
@@ -261,7 +272,43 @@ class TestIdentity:
         with caplog.at_level(logging.WARNING):
             skill = await repo.find_by_name(SkillName("realname"))
         assert skill is not None
-        assert "differs from directory" in caplog.text
+        assert skill.name == SkillName("realname")
+        assert skill.sep_eligible is False
+        assert "frontmatter wins" in caplog.text
+
+    async def test_mismatched_path_key_never_overrides_manifest_name_lookup(
+        self, cache_dir: Path
+    ) -> None:
+        """Legacy Git surfaces resolve the requested frontmatter name only."""
+        ref = _pinned_ref(_sha("9"))
+        repo = _repo(cache_dir, ref)
+        _write_snapshot(
+            repo,
+            ref,
+            {
+                "requested/SKILL.md": _skill_md(
+                    "different", description="path-key decoy", body="Decoy body\n"
+                ),
+                "z/SKILL.md": _skill_md(
+                    "requested", description="manifest winner", body="Winner body\n"
+                ),
+                "z/scripts/value.txt": "winner resource\n",
+            },
+        )
+
+        skill = await repo.find_by_name(SkillName("requested"))
+        assert skill is not None
+        assert skill.description == "manifest winner"
+        server = SkillsMCPServer(repo)
+        tool = json.loads((await server._tool_get_skill("requested"))[0].text)
+        assert tool["body"] == "Winner body"
+        resource = await server._handle_read_resource(
+            "skills://requested/scripts/value.txt"
+        )
+        assert resource[0].content.endswith("winner resource\n")
+        assert "decoy resource" not in resource[0].content
+        prompt = await server._handle_get_prompt("requested")
+        assert "Winner body" in prompt.messages[0].content.text  # type: ignore[union-attr]
 
     async def test_missing_name_falls_back_to_dir_name(
         self, cache_dir: Path, caplog: pytest.LogCaptureFixture
@@ -272,7 +319,9 @@ class TestIdentity:
         with caplog.at_level(logging.WARNING):
             skill = await repo.find_by_name(SkillName("valid-name"))
         assert skill is not None
-        assert "using directory name" in caplog.text
+        assert skill.name == SkillName("valid-name")
+        assert skill.sep_eligible is False
+        assert "using directory name" in caplog.text.lower()
 
     async def test_missing_name_and_invalid_dir_is_skipped(
         self, cache_dir: Path
@@ -300,16 +349,79 @@ class TestIdentity:
             repo,
             ref,
             {
-                "skills/aaa/SKILL.md": _skill_md("dup", description="first"),
-                "skills/bbb/SKILL.md": _skill_md("dup", description="second"),
+                "skills/first/dup/SKILL.md": _skill_md("dup", description="first"),
+                "skills/second/dup/SKILL.md": _skill_md("dup", description="second"),
             },
         )
         with caplog.at_level(logging.WARNING):
             skills = await repo.list_all()
-        assert len(skills) == 1
-        # Sorted walk order: aaa before bbb, so "first" wins.
-        assert skills[0].manifest.description == "first"
-        assert "Duplicate skill name" in caplog.text
+        assert len(skills) == 2
+        assert {skill.manifest.description for skill in skills} == {"first", "second"}
+        assert "Duplicate skill" not in caplog.text
+
+    async def test_duplicate_name_legacy_projection_is_authoritative(
+        self, cache_dir: Path
+    ) -> None:
+        """Every legacy surface resolves the first listed Git aggregate."""
+        ref = _pinned_ref(_sha("f"))
+        repo = _repo(cache_dir, ref)
+        _write_snapshot(
+            repo,
+            ref,
+            {
+                "a/dup/SKILL.md": _skill_md(
+                    "dup", description="first aggregate", body="First body\n"
+                ),
+                "a/dup/scripts/value.txt": "first resource\n",
+                "dup/SKILL.md": _skill_md(
+                    "dup", description="second aggregate", body="Second body\n"
+                ),
+                "dup/scripts/value.txt": "second resource\n",
+            },
+        )
+        server = SkillsMCPServer(repo)
+
+        resources = await server._handle_list_resources()
+        listed = next(resource for resource in resources if resource.name == "dup")
+        assert listed.description == "first aggregate"
+        catalog = json.loads((await server._tool_list_skills())[0].text)
+        assert catalog == [
+            {
+                "name": "dup",
+                "description": "first aggregate",
+                "resources": {"scripts": 1, "references": 0, "assets": 0},
+            }
+        ]
+
+        instructions = await server._handle_read_resource("skills://dup")
+        assert "First body" in instructions[0].content
+        tool_skill = json.loads((await server._tool_get_skill("dup"))[0].text)
+        assert tool_skill["description"] == "first aggregate"
+        assert tool_skill["body"] == "First body"
+        resource = await server._handle_read_resource("skills://dup/scripts/value.txt")
+        assert "first resource" in resource[0].content
+        tool_resource = await server._tool_get_skill_resource(
+            "dup", "scripts/value.txt"
+        )
+        assert tool_resource[0].text == "first resource\n"
+        prompt = await server._handle_get_prompt("dup")
+        assert prompt.description == "first aggregate"
+        assert "First body" in prompt.messages[0].content.text  # type: ignore[union-attr]
+
+        static = await server._static_skills()
+        assert {server._canonical_skill_uri(skill) for skill in static} == {
+            "skill://a/dup/SKILL.md",
+            "skill://dup/SKILL.md",
+        }
+        for uri, body in {
+            "skill://a/dup/SKILL.md": "First body",
+            "skill://dup/SKILL.md": "Second body",
+        }.items():
+            skill = await server._find_skill_by_canonical_uri(uri)
+            assert skill is not None
+            assert body in skill.body
+            canonical = await server._handle_read_resource(uri)
+            assert body in canonical[0].content
 
 
 class TestSubdirScoping:
@@ -542,7 +654,7 @@ class TestGetResourceContent:
     ) -> None:
         repo = _repo(cache_dir, _pinned_ref(_sha("a")))
         skill = MagicMock()
-        skill.name.value = "s"
+        skill.name = SkillName("s")
         skill.path = tmp_path
         repo._skills_cache = {"s": skill}
         with pytest.raises(ResourceNotFoundError):
@@ -553,7 +665,7 @@ class TestGetResourceContent:
     ) -> None:
         repo = _repo(cache_dir, _pinned_ref(_sha("a")))
         skill = MagicMock()
-        skill.name.value = "s"
+        skill.name = SkillName("s")
         skill.path = tmp_path
         skill.get_resource.return_value = None
         repo._skills_cache = {"s": skill}
@@ -565,7 +677,7 @@ class TestGetResourceContent:
         resource = MagicMock()
         resource.path = Path("/etc/passwd")
         skill = MagicMock()
-        skill.name.value = "s"
+        skill.name = SkillName("s")
         skill.path = tmp_path
         skill.get_resource.return_value = resource
         repo._skills_cache = {"s": skill}
@@ -580,7 +692,7 @@ class TestGetResourceContent:
         resource = MagicMock()
         resource.path = big
         skill = MagicMock()
-        skill.name.value = "s"
+        skill.name = SkillName("s")
         skill.path = tmp_path
         skill.get_resource.return_value = resource
         repo._skills_cache = {"s": skill}
@@ -595,7 +707,7 @@ class TestGetResourceContent:
         resource = MagicMock()
         resource.path = f
         skill = MagicMock()
-        skill.name.value = "s"
+        skill.name = SkillName("s")
         skill.path = tmp_path
         skill.get_resource.return_value = resource
         repo._skills_cache = {"s": skill}

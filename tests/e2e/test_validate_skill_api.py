@@ -81,7 +81,6 @@ class TestValidateSkillE2E:
         async with streamable_http_client(validation_server.mcp_url) as (  # noqa: SIM117
             read,
             write,
-            _,
         ):
             async with ClientSession(read, write) as session:
                 await session.initialize()
@@ -99,7 +98,6 @@ class TestValidateSkillE2E:
         async with streamable_http_client(validation_server.mcp_url) as (  # noqa: SIM117
             read,
             write,
-            _,
         ):
             async with ClientSession(read, write) as session:
                 await session.initialize()

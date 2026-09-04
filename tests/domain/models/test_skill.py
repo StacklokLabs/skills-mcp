@@ -68,6 +68,26 @@ class TestSkillCreation:
         assert len(skill.assets) == 1
         assert skill.token_count == 500
 
+    def test_legacy_positional_constructor_order_is_preserved(
+        self, tmp_path: Path
+    ) -> None:
+        """New snapshot fields do not shift established positional arguments."""
+        scripts = [create_test_resource("script.py", ResourceType.SCRIPT)]
+        skill = Skill(
+            create_test_manifest(),
+            "body",
+            tmp_path,
+            scripts,
+            [],
+            [],
+            123,
+            None,
+        )
+
+        assert skill.scripts is scripts
+        assert skill.token_count == 123
+        assert skill.skill_path is not None
+
 
 class TestSkillProperties:
     """Tests for Skill properties."""

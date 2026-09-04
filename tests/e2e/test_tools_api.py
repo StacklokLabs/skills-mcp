@@ -49,20 +49,17 @@ class TestListToolsE2E:
 
             assert {t.name for t in result.tools} == EXPECTED_TOOL_NAMES
 
-    async def test_list_tools_list_skills_description_embeds_fixture_catalog(
+    async def test_list_tools_always_loaded_description_is_static_and_untrusted(
         self, mcp_client_factory_shared: ClientFactory
     ) -> None:
-        """list_skills description should embed the fixture skill catalog."""
+        """Always-loaded text excludes fixture-controlled metadata."""
         async with mcp_client_factory_shared() as client:
             result = await client.list_tools()
             list_skills = next(t for t in result.tools if t.name == "list_skills")
 
             assert list_skills.description is not None
-            assert "Currently available skills:" in list_skills.description
-            assert (
-                "- valid-skill: A valid test skill with all features"
-                in list_skills.description
-            )
+            assert "untrusted" in list_skills.description
+            assert "valid-skill" not in list_skills.description
 
 
 @pytest.mark.e2e
@@ -166,7 +163,7 @@ class TestCallToolGetSkillE2E:
         async with mcp_client_factory_shared() as client:
             result = await client.call_tool("get_skill", {})
 
-            assert result.isError is True
+            assert result.is_error is True
             assert _text(result)
 
     async def test_get_skill_wrong_arg_type_returns_graceful_error(
@@ -185,12 +182,12 @@ class TestCallToolGetSkillE2E:
         async with mcp_client_factory_shared() as client:
             result = await client.call_tool("get_skill", {"name": 123})
 
-            assert result.isError is True
+            assert result.is_error is True
             assert _text(result)
 
             # Session survives the malformed request.
             after = await client.call_tool("list_skills", {})
-            assert after.isError is not True
+            assert after.is_error is not True
             assert json.loads(_text(after))
 
 
@@ -263,8 +260,8 @@ class TestCallToolUnknownE2E:
         """An unknown tool name returns an error result; session survives."""
         async with mcp_client_factory_shared() as client:
             result = await client.call_tool("does-not-exist", {})
-            assert result.isError is True
+            assert result.is_error is True
 
             after = await client.call_tool("list_skills", {})
-            assert after.isError is not True
+            assert after.is_error is not True
             assert json.loads(_text(after))
