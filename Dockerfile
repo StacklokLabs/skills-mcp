@@ -8,7 +8,7 @@
 # breaks module resolution at runtime. Chainguard's free tier only offers
 # :latest, so this drifts when Chainguard bumps Python; the CI Docker job
 # only verifies the build, not a runtime import.
-FROM ghcr.io/astral-sh/uv:0.11-python3.14-trixie-slim@sha256:b6e3a8825dfb232a6b962228f0b5cf98ee1d2b4263f62c2639f68887f4e634a2 AS builder
+FROM ghcr.io/astral-sh/uv:0.12-python3.14-trixie-slim@sha256:a2657d5b8da6a702204e49b2ed2467597da15fb45eb9fee00304c127dad4b1e9 AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Runtime stage: Chainguard minimal image (no auth required for :latest).
 # Digest-pinned so Renovate proposes digest bumps as reviewable PRs; the CI
 # smoke test catches a Python version drift against the builder stage.
-FROM cgr.dev/chainguard/python:latest@sha256:ce9aaca1f826f7f963cd031e98f8c19f993b1843096d395ea919b646e72cb8de
+FROM cgr.dev/chainguard/python:latest@sha256:565af762d7f3efedc4e60d7ac7815e41588211d3f5757be33d8303e915ee6c72
 
 WORKDIR /app
 
