@@ -1,6 +1,7 @@
 """Tests for LocalSkillRepository."""
 
 import asyncio
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,10 +11,18 @@ import pytest
 
 from skills_mcp.domain.exceptions import ResourceNotFoundError, SkillNotFoundError
 from skills_mcp.domain.models.resource import ResourceType
+from skills_mcp.domain.models.skill_file import SkillFile
 from skills_mcp.domain.models.skill_name import SkillName
+from skills_mcp.domain.services.manifest_parser import ManifestParser
+from skills_mcp.domain.services.token_estimator import TokenEstimator
 from skills_mcp.infrastructure.persistence.local_repository import (
     MAX_RESOURCE_SIZE_BYTES,
     LocalSkillRepository,
+)
+from skills_mcp.infrastructure.persistence.skill_loader import (
+    MAX_STATIC_SKILL_BYTES,
+    MAX_STATIC_SKILL_FILES,
+    SkillLoader,
 )
 
 
@@ -34,6 +43,24 @@ class TestLocalSkillRepositoryListAll:
         skill_names = {s.name.value for s in skills}
         assert "valid-skill" in skill_names
         assert "minimal-skill" in skill_names
+
+    async def test_first_configured_root_wins_path_collision(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Later local roots cannot overwrite an exact canonical path."""
+        roots = [tmp_path / "first", tmp_path / "second"]
+        for root, description in zip(roots, ("first", "second"), strict=True):
+            skill_dir = root / "same"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: same\ndescription: {description}\n---\nBody\n"
+            )
+
+        with caplog.at_level(logging.WARNING):
+            skills = await LocalSkillRepository(roots).list_all()
+
+        assert [skill.description for skill in skills] == ["first"]
+        assert "shadowed by an earlier configured root" in caplog.text
 
     async def test_list_all_with_empty_directory(self, tmp_path: Path) -> None:
         """Should return empty list for empty directory."""
@@ -208,6 +235,130 @@ class TestLocalSkillRepositoryTokenCounts:
         assert skill is not None
         for resource in skill.all_resources:
             assert resource.token_count > 0
+
+
+class TestStaticSnapshotLimits:
+    """Tests for complete static snapshot boundaries."""
+
+    def test_legacy_resources_use_captured_bytes_after_source_mutation(
+        self, tmp_path: Path
+    ) -> None:
+        """Legacy projection assembly never reopens files after snapshot capture."""
+        skill_dir = tmp_path / "snapshot-skill"
+        (skill_dir / "scripts").mkdir(parents=True)
+        manifest_path = skill_dir / "SKILL.md"
+        manifest_path.write_text(
+            "---\nname: snapshot-skill\ndescription: Snapshot\n---\nBody\n"
+        )
+        script_path = skill_dir / "scripts" / "run.py"
+        script_path.write_bytes(b"captured\n")
+        parser = ManifestParser()
+        loader = SkillLoader(parser, TokenEstimator())
+        discover_files = loader.discover_files
+
+        def capture_then_mutate(path: Path) -> list[SkillFile]:
+            files = discover_files(path)
+            script_path.unlink()
+            os.mkfifo(script_path)
+            return files
+
+        with patch.object(loader, "discover_files", side_effect=capture_then_mutate):
+            skill = loader.load_skill(
+                skill_dir,
+                manifest_path,
+                lambda content, source, _name: (
+                    *parser.parse_bytes(content, source),
+                    True,
+                ),
+                "snapshot-skill",
+            )
+
+        assert skill is not None
+        assert [resource.name for resource in skill.scripts] == ["run.py"]
+        captured = skill.get_file("scripts/run.py")
+        assert captured is not None
+        assert captured.content == b"captured\n"
+
+    def test_intermediate_symlink_swap_cannot_capture_external_bytes(
+        self, tmp_path: Path
+    ) -> None:
+        """Every traversed component is opened relative to the anchored root."""
+        loader = SkillLoader(ManifestParser(), TokenEstimator())
+        if not loader._supports_descriptor_walk():
+            pytest.skip("descriptor-relative traversal is unavailable")
+
+        skill_dir = tmp_path / "skill"
+        nested = skill_dir / "nested"
+        nested.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_bytes(b"manifest")
+        (nested / "payload.txt").write_bytes(b"safe")
+        external = tmp_path / "external"
+        external.mkdir()
+        secret = b"external-secret"
+        (external / "payload.txt").write_bytes(secret)
+        parked = skill_dir / "nested-before-swap"
+        real_open = os.open
+        swapped = False
+
+        def swap_before_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            mode: int = 0o777,
+            *,
+            dir_fd: int | None = None,
+        ) -> int:
+            nonlocal swapped
+            if path == "nested" and dir_fd is not None and not swapped:
+                swapped = True
+                nested.rename(parked)
+                nested.symlink_to(external, target_is_directory=True)
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with (
+            patch.object(loader, "_supports_descriptor_walk", return_value=True),
+            patch(
+                "skills_mcp.infrastructure.persistence.skill_loader.os.open",
+                swap_before_open,
+            ),
+            patch.object(loader, "_skill_file", wraps=loader._skill_file) as build_file,
+            pytest.raises(ValueError, match="Cannot safely open skill entry nested"),
+        ):
+            loader.discover_files(skill_dir)
+
+        assert swapped
+        assert all(call.args[1] != secret for call in build_file.call_args_list)
+
+    def test_file_count_accepts_limit_and_rejects_next(self, tmp_path: Path) -> None:
+        """The manifest counts toward the exact 512-file boundary."""
+        skill_dir = tmp_path / "skill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_bytes(b"manifest")
+        for index in range(MAX_STATIC_SKILL_FILES - 1):
+            (skill_dir / f"file-{index:03d}").write_bytes(b"")
+        loader = SkillLoader(ManifestParser(), TokenEstimator())
+
+        assert len(loader.discover_files(skill_dir)) == MAX_STATIC_SKILL_FILES
+        (skill_dir / "one-too-many").write_bytes(b"")
+        with pytest.raises(ValueError, match="more than 512 files"):
+            loader.discover_files(skill_dir)
+
+    def test_total_size_accepts_limit_and_rejects_next(self, tmp_path: Path) -> None:
+        """The aggregate captured-byte limit is inclusive at 16 MiB."""
+        skill_dir = tmp_path / "skill"
+        skill_dir.mkdir()
+        manifest = b"manifest"
+        (skill_dir / "SKILL.md").write_bytes(manifest)
+        payload = skill_dir / "payload.bin"
+        payload.write_bytes(b"x" * (MAX_STATIC_SKILL_BYTES - len(manifest)))
+        loader = SkillLoader(ManifestParser(), TokenEstimator())
+
+        assert sum(item.size for item in loader.discover_files(skill_dir)) == (
+            MAX_STATIC_SKILL_BYTES
+        )
+        with payload.open("ab") as stream:
+            stream.write(b"x")
+        with pytest.raises(ValueError, match="exceeds"):
+            loader.discover_files(skill_dir)
 
 
 class TestLocalSkillRepositoryResourceSizeLimits:

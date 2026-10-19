@@ -7,7 +7,7 @@ Get the server running and serving skills in a few minutes. The package is not p
 - Python 3.12 or newer and [uv](https://docs.astral.sh/uv/), or
 - Docker (or another OCI-compatible runtime)
 
-You also need at least one skill: a directory containing a `SKILL.md` file, per the [Agent Skills specification](https://agentskills.io/specification).
+You also need at least one skill: a directory containing an exact `SKILL.md` filename, per the [Agent Skills specification](https://agentskills.io/specification). Its frontmatter `name` must match the containing directory. Frontmatter must be JSON-compatible YAML; static snapshots are limited to 512 regular files and 16 MiB.
 
 ## Run from a checkout
 
@@ -61,7 +61,7 @@ The default log level is `WARNING`, so a healthy startup prints nothing. To see 
 SKILLS_MCP_LOG_LEVEL=INFO uv run skills-mcp
 ```
 
-You should see `Starting skills-mcp server on 127.0.0.1:8080`. Then connect a client (see [connect your client](clients.md)) and ask the agent to call the `list_skills` tool. It should return your skills as a JSON catalog.
+You should see `Starting skills-mcp server on 127.0.0.1:8080`. Then connect a client (see [connect your client](clients.md)). Extension-aware clients can verify `skills/list`; legacy clients can call `list_skills`. Both should return the configured skills.
 
 ## Next steps
 

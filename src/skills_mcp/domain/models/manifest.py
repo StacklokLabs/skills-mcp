@@ -51,6 +51,7 @@ class SkillManifest:
     compatibility: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
     allowed_tools: list[str] = field(default_factory=list)
+    raw_frontmatter: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate manifest fields after initialization."""
@@ -87,6 +88,9 @@ class SkillManifest:
         Returns:
             Dictionary representation of the manifest.
         """
+        if self.raw_frontmatter:
+            return dict(self.raw_frontmatter)
+
         result: dict[str, object] = {
             "name": self.name.value,
             "description": self.description,

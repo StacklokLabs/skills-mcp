@@ -6,9 +6,12 @@ following the Agent Skills specification.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 import frontmatter
+import yaml
+from yaml.tokens import AliasToken, AnchorToken
 
 from skills_mcp.domain.exceptions import ManifestParseError, MissingRequiredFieldError
 from skills_mcp.domain.models.manifest import SkillManifest
@@ -17,6 +20,9 @@ from skills_mcp.domain.models.skill_name import SkillName
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+MAX_FRONTMATTER_BYTES = 1024 * 1024
 
 
 class ManifestParser:
@@ -44,11 +50,33 @@ class ManifestParser:
             MissingRequiredFieldError: If required fields are missing.
         """
         try:
-            content = path.read_text(encoding="utf-8")
+            content = path.read_bytes()
         except OSError as e:
             raise ManifestParseError(str(path), f"cannot read file: {e}") from e
 
-        return self.parse_content(content, str(path))
+        return self.parse_bytes(content, str(path))
+
+    def parse_bytes(
+        self, content: bytes, source: str = "<bytes>"
+    ) -> tuple[SkillManifest, str]:
+        """Parse exact UTF-8 ``SKILL.md`` bytes.
+
+        Args:
+            content: Complete manifest file bytes.
+            source: Source identifier for error messages.
+
+        Returns:
+            Tuple of parsed manifest and Markdown body.
+
+        Raises:
+            ManifestParseError: If bytes are not UTF-8 or frontmatter is unsafe.
+            MissingRequiredFieldError: If required fields are missing.
+        """
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ManifestParseError(source, "SKILL.md must be UTF-8") from exc
+        return self.parse_content(text, source)
 
     def parse_content(
         self, content: str, source: str = "<string>"
@@ -66,23 +94,82 @@ class ManifestParser:
             ManifestParseError: If the content cannot be parsed.
             MissingRequiredFieldError: If required fields are missing.
         """
+        frontmatter_text = self._extract_frontmatter(content, source)
         try:
+            if any(
+                isinstance(token, (AliasToken, AnchorToken))
+                for token in yaml.scan(frontmatter_text)
+            ):
+                raise ManifestParseError(
+                    source, "YAML aliases and anchors are not allowed in frontmatter"
+                )
             post = frontmatter.loads(content)
+        except ManifestParseError:
+            raise
         except Exception as e:
             raise ManifestParseError(source, f"invalid frontmatter: {e}") from e
 
         metadata = post.metadata
         body = post.content
+        try:
+            # Round-tripping through JSON both rejects YAML-only values (dates,
+            # sets, custom objects) and detaches the preserved frontmatter.
+            raw_frontmatter: dict[str, object] = json.loads(
+                json.dumps(metadata, allow_nan=False)
+            )
+            if raw_frontmatter != metadata:
+                raise ValueError("frontmatter changes shape when encoded as JSON")
+        except (TypeError, ValueError) as exc:
+            raise ManifestParseError(
+                source, f"frontmatter must contain only JSON-compatible values: {exc}"
+            ) from exc
 
-        manifest = self._parse_metadata(metadata, source)
+        manifest = self._parse_metadata(metadata, source, raw_frontmatter)
         return manifest, body
 
-    def _parse_metadata(self, metadata: dict[str, Any], source: str) -> SkillManifest:
+    @staticmethod
+    def _extract_frontmatter(content: str, source: str) -> str:
+        """Extract a bounded YAML frontmatter document before parsing.
+
+        Args:
+            content: Complete ``SKILL.md`` text.
+            source: Source identifier for errors.
+
+        Returns:
+            YAML text between the frontmatter delimiters.
+
+        Raises:
+            ManifestParseError: If the frontmatter exceeds the byte limit.
+        """
+        lines = content.splitlines(keepends=True)
+        if not lines or lines[0].rstrip("\r\n") != "---":
+            return ""
+        size = 0
+        collected: list[str] = []
+        for line in lines[1:]:
+            if line.rstrip("\r\n") == "---":
+                return "".join(collected)
+            size += len(line.encode("utf-8"))
+            if size > MAX_FRONTMATTER_BYTES:
+                raise ManifestParseError(
+                    source,
+                    f"frontmatter exceeds {MAX_FRONTMATTER_BYTES} bytes",
+                )
+            collected.append(line)
+        return "".join(collected)
+
+    def _parse_metadata(
+        self,
+        metadata: dict[str, Any],
+        source: str,
+        raw_frontmatter: dict[str, object],
+    ) -> SkillManifest:
         """Parse the frontmatter metadata into a SkillManifest.
 
         Args:
             metadata: The parsed YAML frontmatter.
             source: Source identifier for error messages.
+            raw_frontmatter: Complete JSON-compatible frontmatter as parsed.
 
         Returns:
             A validated SkillManifest.
@@ -131,6 +218,7 @@ class ManifestParser:
                 compatibility=compatibility,
                 metadata=skill_metadata,
                 allowed_tools=allowed_tools,
+                raw_frontmatter=raw_frontmatter,
             )
         except ValueError as e:
             raise ManifestParseError(source, str(e)) from e
@@ -192,7 +280,6 @@ class ManifestParser:
                 source, f"'metadata' must be a mapping, got {type(value).__name__}"
             )
 
-        # Convert all values to strings
         result: dict[str, str] = {}
         for k, v in value.items():
             if not isinstance(k, str):

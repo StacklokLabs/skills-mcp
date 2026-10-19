@@ -7,7 +7,7 @@ This document describes the architecture for exposing Agent Skills via the Model
 1. **Token efficiency**: minimize context usage through progressive disclosure
 2. **Multi-tenancy**: support concurrent agent sessions with isolated state
 3. **Extensibility**: pluggable storage backends (filesystem, git, OCI)
-4. **Spec compliance**: follow both the Agent Skills and MCP specifications
+4. **Standards alignment**: implement the accepted SEP-2640 snapshot without claiming final conformance
 
 ## Progressive disclosure model
 
@@ -49,7 +49,15 @@ Skills are exposed in three tiers, each loaded only when needed:
 
 ## Why three surfaces
 
-The tier model is exposed through three complementary MCP surfaces (resources, tools, and prompts) rather than betting on one, because different AI coding agents load skills in different ways: resource-aware clients (Roo Code, Cline) browse `skills://` URIs, tool-calling agents (Claude Code, Roo Code, Cline, Continue) mirror the native `Skill` tool pattern via `list_skills`/`get_skill`/`get_skill_resource`, and prompt-oriented clients (Continue) turn per-skill MCP prompts into slash commands. The contracts for each surface are in the [MCP surface reference](../reference/mcp-surface.md); the measures that make tool-calling agents actually use the server unprompted are explained in [how agents discover served skills](agent-discovery.md).
+The tier model remains available through three legacy MCP surfaces (resources, tools, and prompts) because clients load skills differently. Extension-aware SDK v2 clients instead discover complete static snapshots through `skills/list` and `skills/get`, then read canonical `skill://` resources. Legacy resource-aware clients retain progressive `skills://` URIs; tool-calling agents retain `list_skills`/`get_skill`/`get_skill_resource`; prompt-oriented clients retain per-skill prompts. The exact contracts are in the [MCP surface reference](../reference/mcp-surface.md).
+
+### Canonical snapshots and identity
+
+The domain owns a normalized source-relative `SkillPath`; MCP URI and extension models remain in infrastructure. A skill name is display and legacy lookup metadata, not identity. Duplicate names at different paths coexist, while the configured source order resolves exact path collisions.
+
+Loading is consolidated around one immutable, bounded snapshot representation. It retains exact `SKILL.md` bytes, complete JSON-compatible frontmatter, normalized convenience fields, and every recursively discovered regular file with captured bytes, mtime, exact byte size, SHA-256 digest, and optional token estimate. Symlinks and snapshots above 512 files or 16 MiB are rejected. Canonical reads use only captured bytes, so later mutation, deletion, or file-type replacement cannot change or block the snapshot; legacy name lookup remains first-match.
+
+The extension uses `capabilities.extensions["io.modelcontextprotocol/skills"]`, `skills/list`, `skills/get`, and `skill://<path>/SKILL.md`. It does not expose `directoryRead` or `resources/directory/read`; complete static file lists make directory reads unnecessary in this snapshot.
 
 ## Multi-tenant session architecture
 
@@ -95,9 +103,9 @@ class SessionState:
 - **Expiry**: sessions expire 24 hours after their last access (`last_accessed`).
 - **Cleanup**: a periodic background task, started in the ASGI lifespan, sweeps expired sessions hourly so long-running servers do not accumulate stale state. The task is cancelled on shutdown.
 
-### Skill name collisions
+### Canonical path collisions
 
-When a `CompositeSkillRepository` combines sources, the first source to register a name wins. A shadowed skill is not dropped silently: each unique collision is logged once at `WARNING` with provenance (which repository shadows which), so operators can see and resolve overlapping skill names.
+When a `CompositeSkillRepository` combines sources, source precedence applies only to an exact source-relative canonical path collision. Duplicate frontmatter names at distinct paths remain visible. A shadowed canonical path is logged once at `WARNING` with source provenance. Legacy APIs intentionally resolve duplicate names by first match.
 
 ## Pluggable repository layer
 
@@ -120,7 +128,7 @@ The protocol admits further backends (for example a database-backed repository) 
 class SkillRepository(Protocol):
     async def list_all(self) -> list[Skill]: ...
     async def find_by_name(self, name: SkillName) -> Skill | None: ...
-    async def get_resource(self, skill: SkillName, resource_type: str, name: str) -> bytes: ...
+    async def get_resource_content(self, skill: SkillName, resource_type: str, name: str) -> bytes: ...
     async def refresh(self) -> None: ...
 ```
 

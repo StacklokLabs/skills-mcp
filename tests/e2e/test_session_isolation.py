@@ -7,11 +7,14 @@ from contextlib import AbstractAsyncContextManager
 
 import pytest
 from mcp import ClientSession
-from pydantic import AnyUrl
 
 
 # Type alias matches conftest.py
 ClientFactory = Callable[[], AbstractAsyncContextManager[ClientSession]]
+
+
+def _uri(value: str) -> str:
+    return value
 
 
 @pytest.mark.e2e
@@ -39,7 +42,7 @@ class TestSessionIsolation:
             assert uris_a_before == uris_b_before
 
             # Client A expands valid-skill
-            await client_a.read_resource(AnyUrl("skills://valid-skill"))
+            await client_a.read_resource(_uri("skills://valid-skill"))
 
             # Client A should now see sub-resources
             resources_a_after = await client_a.list_resources()
@@ -66,10 +69,10 @@ class TestSessionIsolation:
             mcp_client_factory() as client_b,
         ):
             # Client A expands valid-skill
-            await client_a.read_resource(AnyUrl("skills://valid-skill"))
+            await client_a.read_resource(_uri("skills://valid-skill"))
 
             # Client B expands minimal-skill (which has no sub-resources)
-            await client_b.read_resource(AnyUrl("skills://minimal-skill"))
+            await client_b.read_resource(_uri("skills://minimal-skill"))
 
             # Client A should see valid-skill sub-resources
             resources_a = await client_a.list_resources()
@@ -93,7 +96,7 @@ class TestSessionIsolation:
         """A new connection should start with unexpanded state."""
         # First connection expands a skill
         async with mcp_client_factory() as client_1:
-            await client_1.read_resource(AnyUrl("skills://valid-skill"))
+            await client_1.read_resource(_uri("skills://valid-skill"))
             resources_1 = await client_1.list_resources()
             uris_1 = {str(r.uri) for r in resources_1.resources}
             assert any("valid-skill/scripts/analyze.py" in uri for uri in uris_1), (

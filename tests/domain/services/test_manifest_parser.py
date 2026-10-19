@@ -252,8 +252,10 @@ Body
         manifest, _ = parser.parse_content(content)
         assert manifest.metadata == {}
 
-    def test_metadata_values_converted_to_strings(self) -> None:
-        """Metadata values should be converted to strings."""
+    def test_metadata_normalizes_strings_and_raw_frontmatter_preserves_types(
+        self,
+    ) -> None:
+        """Compatibility metadata stays string-valued while raw data is typed."""
         content = """---
 name: my-skill
 description: A skill
@@ -267,9 +269,27 @@ Body
 """
         parser = ManifestParser()
         manifest, _ = parser.parse_content(content)
-        assert manifest.metadata["number"] == "42"
-        assert manifest.metadata["boolean"] == "True"
-        assert manifest.metadata["float"] == "3.14"
+        assert manifest.metadata == {
+            "number": "42",
+            "boolean": "True",
+            "float": "3.14",
+        }
+        assert manifest.raw_frontmatter["metadata"] == {
+            "number": 42,
+            "boolean": True,
+            "float": 3.14,
+        }
+
+    def test_alias_amplification_is_rejected_before_yaml_conversion(self) -> None:
+        """Anchors and aliases cannot amplify a small manifest during parsing."""
+        aliases = ", ".join("*item" for _ in range(1000))
+        content = (
+            "---\nname: alias-skill\ndescription: test\n"
+            f"item: &item [one, two, three]\nexpanded: [{aliases}]\n---\nBody\n"
+        )
+
+        with pytest.raises(ManifestParseError, match="aliases and anchors"):
+            ManifestParser().parse_content(content)
 
     def test_source_in_error_message(self) -> None:
         """Source identifier should appear in error messages."""

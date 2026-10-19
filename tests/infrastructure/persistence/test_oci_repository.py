@@ -1,6 +1,7 @@
 """Tests for OCI skill repository."""
 
 import io
+import json
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 
 from skills_mcp.domain.exceptions import ResourceNotFoundError, SkillNotFoundError
 from skills_mcp.domain.models.skill_name import SkillName
+from skills_mcp.infrastructure.mcp.server import SkillsMCPServer
 from skills_mcp.infrastructure.persistence.oci_models import (
     OCIAuthConfig,
     OCIRepositoryConfig,
@@ -115,12 +117,52 @@ class TestFindByName:
     async def test_finds_cached_skill(self, repo: OCISkillRepository) -> None:
         """Should find skill from cache."""
         mock_skill = MagicMock()
-        mock_skill.name.value = "test-skill"
+        mock_skill.name = SkillName("test-skill")
         repo._skills_cache = {"test-skill": mock_skill}
 
         result = await repo.find_by_name(SkillName("test-skill"))
 
         assert result is mock_skill
+
+    async def test_mismatched_path_key_never_overrides_manifest_name_lookup(
+        self, repo: OCISkillRepository, tmp_path: Path
+    ) -> None:
+        """Legacy OCI surfaces resolve the requested frontmatter name only."""
+        decoy_dir = tmp_path / "requested"
+        winner_dir = tmp_path / "z"
+        for skill_dir, name, description, body in (
+            (decoy_dir, "different", "path-key decoy", "Decoy body"),
+            (winner_dir, "requested", "manifest winner", "Winner body"),
+        ):
+            (skill_dir / "scripts").mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                f"---\nname: {name}\ndescription: {description}\n---\n{body}\n"
+            )
+            (skill_dir / "scripts/value.txt").write_text(
+                "decoy resource\n" if name == "different" else "winner resource\n"
+            )
+        decoy = await repo._load_skill_from_dir(
+            decoy_dir, decoy_dir / "SKILL.md", "requested"
+        )
+        winner = await repo._load_skill_from_dir(
+            winner_dir, winner_dir / "SKILL.md", "z"
+        )
+        assert decoy is not None
+        assert winner is not None
+        repo._skills_cache = {"requested": decoy, "z": winner}
+
+        skill = await repo.find_by_name(SkillName("requested"))
+        assert skill is winner
+        server = SkillsMCPServer(repo)
+        tool = json.loads((await server._tool_get_skill("requested"))[0].text)
+        assert tool["body"] == "Winner body"
+        resource = await server._handle_read_resource(
+            "skills://requested/scripts/value.txt"
+        )
+        assert resource[0].content.endswith("winner resource\n")
+        assert "decoy resource" not in resource[0].content
+        prompt = await server._handle_get_prompt("requested")
+        assert "Winner body" in prompt.messages[0].content.text  # type: ignore[union-attr]
 
 
 class TestGetResourceContent:
@@ -138,7 +180,7 @@ class TestGetResourceContent:
     ) -> None:
         """Should raise ResourceNotFoundError for invalid resource type."""
         mock_skill = MagicMock()
-        mock_skill.name.value = "test-skill"
+        mock_skill.name = SkillName("test-skill")
         mock_skill.path = tmp_path
         repo._skills_cache = {"test-skill": mock_skill}
 
@@ -152,7 +194,7 @@ class TestGetResourceContent:
     ) -> None:
         """Should raise ResourceNotFoundError when resource doesn't exist."""
         mock_skill = MagicMock()
-        mock_skill.name.value = "test-skill"
+        mock_skill.name = SkillName("test-skill")
         mock_skill.path = tmp_path
         mock_skill.get_resource.return_value = None
         repo._skills_cache = {"test-skill": mock_skill}
@@ -171,7 +213,7 @@ class TestGetResourceContent:
         mock_resource.path = Path("/etc/passwd")
 
         mock_skill = MagicMock()
-        mock_skill.name.value = "test-skill"
+        mock_skill.name = SkillName("test-skill")
         mock_skill.path = tmp_path
         mock_skill.get_resource.return_value = mock_resource
         repo._skills_cache = {"test-skill": mock_skill}
@@ -194,7 +236,7 @@ class TestGetResourceContent:
         mock_resource.path = resource_file
 
         mock_skill = MagicMock()
-        mock_skill.name.value = "test-skill"
+        mock_skill.name = SkillName("test-skill")
         mock_skill.path = tmp_path
         mock_skill.get_resource.return_value = mock_resource
         repo._skills_cache = {"test-skill": mock_skill}
@@ -217,7 +259,7 @@ class TestGetResourceContent:
         mock_resource.path = resource_file
 
         mock_skill = MagicMock()
-        mock_skill.name.value = "test-skill"
+        mock_skill.name = SkillName("test-skill")
         mock_skill.path = tmp_path
         mock_skill.get_resource.return_value = mock_resource
         repo._skills_cache = {"test-skill": mock_skill}
@@ -678,7 +720,7 @@ class TestAsyncErrorHandling:
             if call_count == 1:
                 return None  # First fails
             mock_skill = MagicMock()
-            mock_skill.name.value = "skill2"
+            mock_skill.name = SkillName("skill2")
             return mock_skill
 
         with patch.object(repo, "_try_pull_skill", side_effect=mock_try_pull):
@@ -695,7 +737,7 @@ class TestLoadSkillFromDir:
         self, repo: OCISkillRepository, tmp_path: Path
     ) -> None:
         """Should load skill from directory with SKILL.md."""
-        skill_dir = tmp_path / "skill"
+        skill_dir = tmp_path / "test-skill"
         skill_dir.mkdir()
 
         # Create SKILL.md
@@ -775,7 +817,7 @@ class TestOCISkillRepositoryLastModified:
         OCI artifacts are extracted with tar.extractall / copytree, which
         preserve archived mtimes, so the extracted mtime is meaningful.
         """
-        skill_dir = tmp_path / "skill"
+        skill_dir = tmp_path / "oci-skill"
         (skill_dir / "scripts").mkdir(parents=True)
         manifest_path = skill_dir / "SKILL.md"
         manifest_path.write_text(
@@ -794,7 +836,7 @@ class TestOCISkillRepositoryLastModified:
         self, repo: OCISkillRepository, tmp_path: Path
     ) -> None:
         """The skill last_modified must equal the SKILL.md mtime in UTC."""
-        skill_dir = tmp_path / "skill"
+        skill_dir = tmp_path / "oci-skill"
         skill_dir.mkdir()
         manifest_path = skill_dir / "SKILL.md"
         manifest_path.write_text(

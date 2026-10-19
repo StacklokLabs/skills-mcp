@@ -28,18 +28,22 @@ class TestInitializeCapabilitiesE2E:
         async with streamable_http_client(e2e_server.mcp_url) as (  # noqa: SIM117
             read,
             write,
-            _,
         ):
-            async with ClientSession(read, write) as session:
-                result = await session.initialize()
+            async with ClientSession(
+                read,
+                write,
+                extensions={"io.modelcontextprotocol/skills": {}},
+            ) as session:
+                result = await session.discover()
 
-                # Experimental skills extension capability is declared.
-                assert result.capabilities.experimental is not None
+                # Standard SEP-2133 extension capability is declared.
+                assert result.capabilities.extensions is not None
                 assert (
-                    "io.modelcontextprotocol/skills" in result.capabilities.experimental
+                    "io.modelcontextprotocol/skills" in result.capabilities.extensions
                 )
+                assert result.capabilities.experimental in (None, {})
 
-                # resources.listChanged is advertised True (we send the
-                # list_changed notification on first expansion).
+                # Modern v2 discovery delivers changes through subscriptions/listen;
+                # this server intentionally has no directory/subscription stream.
                 assert result.capabilities.resources is not None
-                assert result.capabilities.resources.listChanged is True
+                assert result.capabilities.resources.list_changed is False

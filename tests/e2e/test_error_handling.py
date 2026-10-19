@@ -6,12 +6,15 @@ from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 
 import pytest
-from mcp import ClientSession, McpError
-from pydantic import AnyUrl
+from mcp import ClientSession, MCPError
 
 
 # Type alias matches conftest.py
 ClientFactory = Callable[[], AbstractAsyncContextManager[ClientSession]]
+
+
+def _uri(value: str) -> str:
+    return value
 
 
 @pytest.mark.e2e
@@ -21,8 +24,8 @@ class TestMissingResources:
     async def test_nonexistent_skill(self, mcp_client_factory: ClientFactory) -> None:
         """Reading nonexistent skill should raise error."""
         async with mcp_client_factory() as mcp_client:
-            with pytest.raises(McpError):
-                await mcp_client.read_resource(AnyUrl("skills://nonexistent-skill"))
+            with pytest.raises(MCPError):
+                await mcp_client.read_resource(_uri("skills://nonexistent-skill"))
 
     async def test_nonexistent_sub_resource(
         self, mcp_client_factory: ClientFactory
@@ -30,12 +33,12 @@ class TestMissingResources:
         """Reading nonexistent sub-resource should raise error."""
         async with mcp_client_factory() as mcp_client:
             # First expand the skill
-            await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            await mcp_client.read_resource(_uri("skills://valid-skill"))
 
             # Try to read nonexistent script
-            with pytest.raises(McpError):
+            with pytest.raises(MCPError):
                 await mcp_client.read_resource(
-                    AnyUrl("skills://valid-skill/scripts/nonexistent.py")
+                    _uri("skills://valid-skill/scripts/nonexistent.py")
                 )
 
     async def test_invalid_resource_type(
@@ -43,11 +46,11 @@ class TestMissingResources:
     ) -> None:
         """Invalid resource type should raise error."""
         async with mcp_client_factory() as mcp_client:
-            await mcp_client.read_resource(AnyUrl("skills://valid-skill"))
+            await mcp_client.read_resource(_uri("skills://valid-skill"))
 
-            with pytest.raises(McpError):
+            with pytest.raises(MCPError):
                 await mcp_client.read_resource(
-                    AnyUrl("skills://valid-skill/invalid-type/file.txt")
+                    _uri("skills://valid-skill/invalid-type/file.txt")
                 )
 
 
@@ -58,15 +61,15 @@ class TestInvalidURIs:
     async def test_empty_skill_name(self, mcp_client_factory: ClientFactory) -> None:
         """Empty skill name should raise error."""
         async with mcp_client_factory() as mcp_client:
-            with pytest.raises(McpError):
-                await mcp_client.read_resource(AnyUrl("skills://"))
+            with pytest.raises(MCPError):
+                await mcp_client.read_resource(_uri("skills://"))
 
     async def test_path_traversal_rejected(
         self, mcp_client_factory: ClientFactory
     ) -> None:
         """Path traversal attempts should be rejected."""
         async with mcp_client_factory() as mcp_client:
-            with pytest.raises(McpError):
+            with pytest.raises(MCPError):
                 await mcp_client.read_resource(
-                    AnyUrl("skills://valid-skill/../../../etc/passwd")
+                    _uri("skills://valid-skill/../../../etc/passwd")
                 )

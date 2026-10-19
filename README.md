@@ -21,13 +21,13 @@ Connect any Streamable HTTP MCP client (Claude Code, Claude Desktop, Roo Code, C
 
 ## How agents consume skills
 
-The same skills are exposed through three complementary MCP surfaces, so a client can use whichever mechanism it supports: **resources** (`skills://` URIs with progressive disclosure), **tools** (`list_skills`, `get_skill`, `get_skill_resource`, `validate_skill`), and **prompts** (one per skill, which clients turn into slash commands). The `list_skills` tool embeds the skill catalog in its always-loaded description, which is what makes agents pick up served skills on natural prompts without being told.
+The same skills are exposed through an accepted SEP-2640 snapshot for extension-aware clients (`skills/list`, `skills/get`, and canonical byte-faithful `skill://<path>/SKILL.md` resources) and through the existing legacy surfaces: progressive `skills://` resources, tools (`list_skills`, `get_skill`, `get_skill_resource`, `validate_skill`), and prompts. Names are display metadata; source-relative paths are canonical identity, so duplicate names can coexist. Canonical reads preserve exact bytes and never inject token headers.
 
-Details: [MCP surface reference](docs/reference/mcp-surface.md), [getting agents to use your skills](docs/guides/agent-uptake.md), and the [SEP-2640 alignment notes](docs/reference/mcp-surface.md#sep-2640-alignment).
+Details: [MCP surface reference](docs/reference/mcp-surface.md), [getting agents to use your skills](docs/guides/agent-uptake.md), and the [SEP-2640 snapshot notes](docs/reference/mcp-surface.md#sep-2640-skills-extension). This is alignment with accepted PR head `d6b31a03504c15677d49b922b6b6ace0ef65728d`, not a claim of final conformance; `directoryRead` remains deferred.
 
 ## Skill sources
 
-A `skills.yaml` file can pull skills from three kinds of source, in any combination (local takes precedence over git, then OCI, on name collisions):
+A `skills.yaml` file can pull skills from three kinds of source, in any combination (local takes precedence over git, then OCI, only on exact canonical-path collisions):
 
 - **Local filesystem** (`local:`): directories scanned for `SKILL.md`
 - **Git repositories** (`git:`): cloned over HTTPS from `git://host/owner/repo[@ref][#subdir]` references

@@ -13,11 +13,14 @@ from datetime import datetime
 
 import pytest
 from mcp import ClientSession
-from pydantic import AnyUrl
 
 
 # Type alias matches conftest.py
 ClientFactory = Callable[[], AbstractAsyncContextManager[ClientSession]]
+
+
+def _uri(value: str) -> str:
+    return value
 
 
 def _last_modified(resource: object) -> str | None:
@@ -60,7 +63,7 @@ class TestResourceAnnotationsE2E:
         """After expansion, a sub-resource shows priority 0.3."""
         async with mcp_client_factory() as client:
             # Expand the skill so its sub-resources are listed.
-            await client.read_resource(AnyUrl("skills://valid-skill"))
+            await client.read_resource(_uri("skills://valid-skill"))
 
             resources = await client.list_resources()
             script = next(

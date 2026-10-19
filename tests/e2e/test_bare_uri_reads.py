@@ -13,11 +13,14 @@ from contextlib import AbstractAsyncContextManager
 
 import pytest
 from mcp import ClientSession
-from pydantic import AnyUrl
 
 
 # Type alias matches conftest.py
 ClientFactory = Callable[[], AbstractAsyncContextManager[ClientSession]]
+
+
+def _uri(value: str) -> str:
+    return value
 
 
 @pytest.mark.e2e
@@ -30,7 +33,7 @@ class TestBareURIReadsE2E:
         """A fresh session reads skill instructions bare, with no resources/list."""
         async with mcp_client_factory() as client:
             # First contact with the server for resources: a direct read.
-            content = await client.read_resource(AnyUrl("skills://valid-skill"))
+            content = await client.read_resource(_uri("skills://valid-skill"))
 
             assert len(content.contents) == 1
             text = content.contents[0]
@@ -45,7 +48,7 @@ class TestBareURIReadsE2E:
             # Read the sub-resource directly. The skill was never expanded in
             # this session and resources/list was never called.
             content = await client.read_resource(
-                AnyUrl("skills://valid-skill/scripts/analyze.py")
+                _uri("skills://valid-skill/scripts/analyze.py")
             )
 
             assert len(content.contents) == 1

@@ -16,33 +16,26 @@ Three causes stacked on top of each other:
 
 Each mitigation targets one of those causes. All of them live in `src/skills_mcp/infrastructure/mcp/server.py`.
 
-**Imperative instructions with an authority claim.** The server's MCP instructions (one of the only two things a tool-search client shows the model up front) are written as trigger text, not a capability statement. They name concrete trigger tasks (commit messages, release notes, changelogs, PR descriptions), and they borrow the wording that works for Context7's documentation server: check the catalog *even if you already know how to do the task*, because the organization's skill is authoritative and encodes conventions your defaults will miss.
+**Origin-aware instructions without an authority claim.** Server instructions identify operator-configured local, Git, or OCI origins and direct legacy clients to the discovery workflow, while explicitly requiring host policy, permissions, and user instructions to govern use. Skill content is untrusted input; the server does not call it vetted or authoritative and does not tell a model to follow it exactly.
 
 **Explicit disambiguation from native skills.** The instructions and the `list_skills` description both state that these skills are separate from any built-in skills the client ships with. In trials, this flipped the "check what skills are available" prompt from a failure (routed to the native feature) to a full, correct skill run.
 
-**`anthropic/alwaysLoad` on `list_skills`.** This meta flag is Claude Code's documented per-tool exemption from tool-search deferral. With it, the `list_skills` description, which carries the embedded catalog and the trigger text, is in context from the first turn. This was the decisive change: bare natural prompts went from 0/6 to 4/4, with the model calling `list_skills` directly (no tool search step) and then pulling `get_skill` and `get_skill_resource` on demand. Only the one discovery tool is always loaded; the rest stay deferred, which keeps the context cost near the price of the catalog itself.
+**`anthropic/alwaysLoad` on `list_skills`.** This meta flag keeps a neutral discovery hint in Claude Code's initial context. The description contains no skill names or descriptions because repository content is untrusted; the model must call `list_skills` to retrieve the catalog as data. This closes an always-loaded prompt-injection boundary, at the cost of no longer exposing per-skill trigger text before the first tool call.
 
-**A byte-budgeted embedded catalog where every skill is at least named.** Clients truncate tool descriptions at around 2 KB, so the catalog is built against an explicit byte budget: up to 10 full name+description entries while they fit, then a names-only overflow line ("Also available: pdf, pptx, xlsx, ... (call list_skills for details)"), and only past that a bare count. The honest reading of the measurements: both a count-only marker and the names-only line were tested against prompts matching a past-cap skill, and *neither* drove discovery (0/2 each). The model answered from its own knowledge in seconds without paging the catalog; a bare name carries no domain cue. What reliably triggers a skill is a full entry, whose description says when to use it. The names line stays because it costs little and lets a model that *does* read the catalog (for example when the user asks what skills exist) see everything, but the practical rule is: **a skill only fires unprompted if it has a full entry in the always-loaded description**.
+**Catalog data is disclosed only by the tool result.** Names and descriptions remain available from `list_skills`, but never appear in the always-loaded tool description. For reliable uptake, explicitly steer the client to call `list_skills` or use an extension-aware client that discovers `skills/list`.
 
 **"Use when" descriptions and read-only annotations.** Every tool description states when to call it and shows one example call. All four tools declare `readOnlyHint`/`idempotentHint` annotations, which clients use to relax permission handling and parallelize calls.
 
 ## How this scales: large catalogs
 
-Unprompted discovery rides on a roughly 2 KB context window (the always-loaded `list_skills` description), which fits about ten described skills. That gives a large catalog three tiers of visibility:
-
-1. **Full entries (about the first 10 skills).** Name plus trigger description in context from turn 1. These fire unprompted; this is the measured, working path.
-2. **Names only (the next few dozen, budget permitting).** Present in an "Also available: pdf, pptx, ..." line. Measured result: a bare name never triggered discovery (0/2 on a task matching a named skill). These skills exist for a model that reads the catalog deliberately, but do not fire on their own.
-3. **A bare count (everything past the byte budget).** Invisible until something else causes a `list_skills` call.
-
-So with 100+ skills, expect roughly 90% of the catalog to be inert for unprompted use. Catalog order decides who gets tier 1, and today that order is simply source order (local sources first, then git, then OCI); there is no way yet to pin specific skills into the full entries.
+The always-loaded description is intentionally static and contains no repository-controlled names or descriptions. Large and small catalogs therefore have the same safe discovery path: the model calls `list_skills`, then selects from the returned untrusted catalog data.
 
 What to do about it, in order of confidence:
 
-- **Use CLAUDE.md steering per project.** At small catalog sizes the steering line is optional reinforcement; at large sizes it becomes the mechanism, because it forces the full-catalog call instead of relying on the embedded preview. It measured 2/2 and its reliability does not depend on catalog size. Different teams can name different trigger domains in their own projects.
-- **Scope connections instead of growing the catalog.** A team rarely needs 100 skills at once; serving a filtered subset per team keeps each connection's catalog inside the budget honestly.
-- **Curate the order.** Until priority pinning exists, arrange sources so the skills that matter most land in the first ten entries.
+- **Use CLAUDE.md steering per project.** Explicitly require the full-catalog call. Its reliability does not depend on catalog size.
+- **Scope connections instead of growing the catalog.** A team rarely needs 100 skills at once; serving a filtered subset makes the returned catalog easier to select from.
 
-Two directions are plausible but unmeasured: a search-style dispatch tool (`find_skill(task)`) whose always-loaded description carries domain *keywords* instead of full entries (keywords are ~10 bytes each, so 100 domains fit where 100 descriptions cannot, but weak cues have already been seen to fail, so this needs trials before trusting it), and client-side support for the SEP-2640 skills extension, which would let clients preload served skill descriptions the way they preload local ones and remove the 2 KB constraint entirely.
+Two directions serve different clients: a search-style legacy dispatch tool (`find_skill(task)`) remains unmeasured, while extension-aware clients can now negotiate the accepted SEP-2640 snapshot and preload `skills/list` descriptions without relying on the 2 KB tool-description preview. The extension path is implemented; actual uptake still depends on client support.
 
 Until then, the honest positioning is: a drop-in replacement up to roughly a dozen skills per connection; beyond that, add per-project steering or scoping.
 
